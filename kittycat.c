@@ -92,10 +92,17 @@ __FBSDID("$FreeBSD: src/bin/cat/cat.c,v 1.32 2005/01/10 08:39:20 imp Exp $");
 #include <string.h>
 #include <unistd.h>
 #include <stddef.h>
+#include <signal.h>
+#include <time.h>
 
 int bflag, eflag, nflag, sflag, tflag, vflag;
+int kflag; // kittycat (kc) extensions
 int rval;
 const char *filename;
+const char *kitty;       // path to kitty marker (PID file) that facilitates signalling us
+sigset_t kitty_catnip_invulnerabilities; // catnip (or other origin) signals to ignore
+struct timespec kitty_catnap_request;    // set .tv_sec or .tv_nsec to requested nap time
+struct timespec kitty_catnap_remainder;  // side effect of nanosleep() for premature wake
 
 static void usage(void);
 static void scanfiles(char *argv[], int cooked);
@@ -112,8 +119,12 @@ main(int argc, char *argv[])
 	int ch;
 
 	setlocale(LC_CTYPE, "");
+	kitty = ".kc"; // warning: default does not support concurrency in shared file namespace
+	kitty_catnip_invulnerabilities = 0;
+	kitty_catnap_request.tv_sec = 0;
+	kitty_catnap_request.tv_nsec = 250000000; // default to quarter second
 
-	while ((ch = getopt(argc, argv, "benstuv")) != -1)
+	while ((ch = getopt(argc, argv, "benstuvk:w:")) != -1)
 		switch (ch) {
 		case 'b':
 			bflag = nflag = 1;	/* -b implies -n */
@@ -135,6 +146,13 @@ main(int argc, char *argv[])
 			break;
 		case 'v':
 			vflag = 1;
+			break;
+		case 'k': 			/* kitty rendezvous path */
+			++kflag;
+			kitty = optarg;
+			break;
+		case 'w':			/* kitty catnap wait time */
+			parse_timespec( optarg, &kitty_catnap_request );
 			break;
 		default:
 			usage();
@@ -341,3 +359,13 @@ udom_open(const char *path, int flags)
 }
 
 #endif
+
+static void 
+parse_timespec( char* wait_time, struct timespec* result )
+{
+	double seconds;
+	sscanf( wait_time, &seconds );
+	result->tv_sec = (int)seconds;
+	result->tv_nsec = (int)( ( seconds - (double)result->tv_sec ) / 1e-9 );
+}
+
