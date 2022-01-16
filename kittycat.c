@@ -108,6 +108,7 @@ static void usage(void);
 static void scanfiles(char *argv[], int cooked);
 static void cook_cat(FILE *);
 static void raw_cat(int);
+static void create_kitty_marker();
 static void parse_timespec( char* wait_time, struct timespec* result );
 static void wait_for_catnip();
 
@@ -126,6 +127,7 @@ main(int argc, char *argv[])
 	kitty_catnap_request.tv_sec = 0;
 	kitty_catnap_request.tv_nsec = 250000000; // default to quarter second
 
+	create_kitty_marker(); // kittycat extension for backwash signalling along pipeline
 	while ((ch = getopt(argc, argv, "benstuvk:w:")) != -1)
 		switch (ch) {
 		case 'b':
@@ -150,7 +152,7 @@ main(int argc, char *argv[])
 			vflag = 1;
 			break;
 		case 'k': 			/* kitty rendezvous path */
-			++kflag;
+			++kflag;		/* why? for debugging. it's not like it changes behavior */
 			kitty = optarg;
 			break;
 		case 'w':			/* kitty catnap wait time */
@@ -362,6 +364,34 @@ udom_open(const char *path, int flags)
 }
 
 #endif
+
+/*
+ * create_kitty_marker writes our PID to a file so kill(1), cn (1) (a.k.a. catnip), or others
+ * can signal us when they have actually posted content to the files we are about to cat.
+ * such signalling provides a more reliable mechanism than the assumption of those resources
+ * being available after some amount of time.
+ *
+ * should be passed context, but in keeping with the cat(1) we're incorporating into,
+ * we instead use dependencies (ick) on global variables (joy).
+ * 	const char *kitty;       // path to kitty marker (PID file) that facilitates signalling us
+ *
+ * it is the caller's responsibility to provide a reasonable value for kitty, such as ".kc".
+ */
+static void 
+create_kitty_marker()
+{
+	if( kitty ){ // else should warn of reduced functionality...
+		FILE *fp;
+		int fd;
+		fd = open(kitty, O_WRONLY|O_CREAT|O_TRUNC, 0600); // allow cn et al to query and future us to overwrite
+		if (fd < 0) {
+			warn("%s", kitty);
+		}else{
+			dprintf( fd, "%d\n", getpid() );
+			close( fd );
+		}
+	}
+}
 
 static void 
 parse_timespec( char* wait_time, struct timespec* result )
