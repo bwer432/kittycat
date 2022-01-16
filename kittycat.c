@@ -108,6 +108,8 @@ static void usage(void);
 static void scanfiles(char *argv[], int cooked);
 static void cook_cat(FILE *);
 static void raw_cat(int);
+static void parse_timespec( char* wait_time, struct timespec* result );
+static void wait_for_catnip();
 
 #ifndef NO_UDOM_SUPPORT
 static int udom_open(const char *path, int flags);
@@ -187,6 +189,7 @@ scanfiles(char *argv[], int cooked)
 	while ((path = argv[i]) != NULL || i == 0) {
 		int fd;
 
+		wait_for_catnip(); // kittycat extension
 		if (path == NULL || strcmp(path, "-") == 0) {
 			filename = "stdin";
 			fd = STDIN_FILENO;
@@ -364,8 +367,28 @@ static void
 parse_timespec( char* wait_time, struct timespec* result )
 {
 	double seconds;
-	sscanf( wait_time, &seconds );
+	sscanf( wait_time, "%lg", &seconds );
 	result->tv_sec = (int)seconds;
 	result->tv_nsec = (int)( ( seconds - (double)result->tv_sec ) / 1e-9 );
 }
+
+/*
+ * wait_for_catnip can wait for either a signal or a time period.
+ * this could be used with the catnip(1) command or any other kill(2) or signal initiator,
+ * or just time delay.
+ * implement with sigsuspend() or nanosleep() according to particular criteria needed.
+ * 
+ * should be passed context, but in keeping with the cat(1) we're incorporating into,
+ * we instead use dependencies (ick) on global variables (joy).
+ *
+ * 	sigset_t kitty_catnip_invulnerabilities; // catnip (or other origin) signals to ignore
+ * 	struct timespec kitty_catnap_request;    // set .tv_sec or .tv_nsec to requested nap time
+ * 	struct timespec kitty_catnap_remainder;  // side effect of nanosleep() for premature wake
+ */
+static void 
+wait_for_catnip()
+{
+	nanosleep( &kitty_catnap_request, &kitty_catnap_remainder );
+}
+
 
