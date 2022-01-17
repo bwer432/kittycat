@@ -1,0 +1,73 @@
+1. `kc` (kittycat) should differentiate between SIGCONT to continue to the next input, vs. SIGTERM to continue through all without need for further signals.
+2. `nc` (catnip) should generate SIGCONT per file processed, and SIGTERM when done with the set.
+3. `nc` should be able to do web parsing, however this is an option, and should remain rudimentary.
+4. Static files - e.g. index.html page1.html etc.
+	- GET, HEAD, TRACE
+	- POST, PUT, PATCH
+	- OPTIONS, DELETE, CONNECT
+5. Query strings - how to process these?
+Jim Fisher use of `nc` (netcat) as a web server:
+https://jameshfisher.com/2018/12/31/how-to-make-a-webserver-with-netcat-nc/
+
+```http
+GET /index.html HTTP/1.1
+Host: localhost:8000
+User-Agent: curl/7.54.0
+Accept: */*
+```
+
+General HTTP Message information:
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Messages
+- HTTP method
+- request target
+- HTTP version
+
+e.g.
+POST / HTTP/1.1
+GET /background.png HTTP/1.0
+HEAD /test.html?query=alibaba HTTP/1.1
+OPTIONS /anypage.html HTTP/1.0
+
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods
+
+GET
+The GET method requests a representation of the specified resource. Requests using GET should only retrieve data.
+
+HEAD
+The HEAD method asks for a response identical to a GET request, but without the response body.
+
+POST
+The POST method submits an entity to the specified resource, often causing a change in state or side effects on the server.
+
+PUT
+The PUT method replaces all current representations of the target resource with the request payload.
+
+DELETE
+The DELETE method deletes the specified resource.
+
+CONNECT
+The CONNECT method establishes a tunnel to the server identified by the target resource.
+
+OPTIONS
+The OPTIONS method describes the communication options for the target resource.
+
+TRACE
+The TRACE method performs a message loop-back test along the path to the target resource.
+
+PATCH
+The PATCH method applies partial modifications to a resource.
+
+
+
+
+
+kill syntax is:
+		"usage: kill [-s signal_name] pid ...",
+		"       kill -l [exit_status]",
+		"       kill -signal_name pid ...",
+		"       kill -signal_number pid ...");
+cn (catnip) syntax is:
+		"usage: cn [-s signal_name] [-k process_file] pid ...",
+		"       cn -l [exit_status]",
+		"       cn -signal_name [-k process_file] pid ...",
+		"       cn -signal_number [-k process_file] pid ...");

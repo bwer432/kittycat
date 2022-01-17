@@ -87,6 +87,7 @@ void nosig __P((char *));
 void printsignals __P((FILE *));
 int signame_to_signum __P((char *));
 void usage __P((void));
+static pid_t read_kitty_marker();
 
 int
 main(argc, argv)
@@ -95,11 +96,15 @@ main(argc, argv)
 {
 	int errors, numsig, pid;
 	char *ep;
+	char *kitty; // kc (kittycat) signal file
+	pid_t kitty_pid; // pid of kc (kittycat) or other process to signal
 
 	if (argc < 2)
 		usage();
 
-	numsig = SIGTERM;
+	numsig = SIGCONT;	// catnip defaults to SIGCONT unlike kill's default SIGTERM;
+	kitty = ".kc"; // warning: default does not support concurrency in shared file namespace
+	kitty_pid
 
 	argc--, argv++;
 	if (!strcmp(*argv, "-l")) {
@@ -134,6 +139,14 @@ main(argc, argv)
 				nosig(*argv);
 		} else
 			numsig = 0;
+		argc--, argv++;
+	} else if (!strcmp(*argv, "-k")) { /* kitty rendezvous path */
+		argc--, argv++;
+		if (argc < 1) {
+			warnx("option requires an argument -- k");
+			usage();
+		}
+		kitty = *argv; // assign kittycat PID file path
 		argc--, argv++;
 	} else if (**argv == '-') {
 		++*argv;
@@ -218,4 +231,29 @@ usage()
 		"       kill -signal_name pid ...",
 		"       kill -signal_number pid ...");
 	exit(1);
+}
+
+
+/*
+ * read_kitty_marker reads a PID from a file we can signal the upstream command (e.g. kittycat)
+ * that have actually posted content to the files we are about to cat.
+ *
+ * it is the caller's responsibility to provide a reasonable value for kitty, such as ".kc".
+ */
+static int 
+read_kitty_marker( char* kitty )
+{
+	pid_t kitty_pid = -1;
+	if( kitty ){ // else should warn of reduced functionality...
+		FILE *fp;
+		int fd;
+		fd = open(kitty, O_RDONLY); // query value written by kc (kittycat)
+		if (fd < 0) {
+			warn("%s", kitty);
+		}else{
+			kitty_pid = dscanf( fd, "%d" );
+			close( fd );
+		}
+	}
+	return kitty_pid;
 }
