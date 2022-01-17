@@ -77,6 +77,7 @@ static const char rcsid[] =
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
+#include <fcntl.h>	// catnip for open, read, write, close, etc.
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -88,23 +89,49 @@ void printsignals __P((FILE *));
 int signame_to_signum __P((char *));
 void usage __P((void));
 static pid_t read_kitty_marker();
+int http_trace( char* message );
+int http_head( char* message );
+int http_get( char* message );
+int http_post( char* message );
+int http_patch( char* message );
+int http_put( char* message );
+int http_options( char* message );
+int http_delete( char* message );
+int http_connect( char* message );
+
+struct method_action {
+	char* method;
+	int (*action)( char* message );
+};
+
+struct method_action http_methods[] = {
+	{ "TRACE",	http_trace },
+	{ "HEAD",  	http_head },
+	{ "GET",   	http_get }, 
+	{ "POST",  	http_post }, 
+	{ "PATCH", 	http_patch },
+	{ "PUT", 	http_put },
+	{ "OPTIONS", 	http_options },
+	{ "DELETE", 	http_delete },
+	{ "CONNECT", 	http_connect },
+	{ NULL,		0 }
+};
 
 int
 main(argc, argv)
 	int argc;
 	char *argv[];
 {
-	int errors, numsig, pid;
+	int errors, numsig, pid; // pid of kc (kittycat) or other process to signal
 	char *ep;
 	char *kitty; // kc (kittycat) signal file
-	pid_t kitty_pid; // pid of kc (kittycat) or other process to signal
 
 	if (argc < 2)
 		usage();
 
 	numsig = SIGCONT;	// catnip defaults to SIGCONT unlike kill's default SIGTERM;
 	kitty = ".kc"; // warning: default does not support concurrency in shared file namespace
-	kitty_pid
+	pid = read_kitty_marker( kitty );
 
 	argc--, argv++;
 	if (!strcmp(*argv, "-l")) {
@@ -166,6 +193,8 @@ main(argc, argv)
 
 	if (argc == 0)
 		usage();
+
+	parse_request( STDIN_FILENO );
 
 	for (errors = 0; argc; argc--, argv++) {
 		pid = strtol(*argv, &ep, 10);
@@ -243,17 +272,118 @@ usage()
 static int 
 read_kitty_marker( char* kitty )
 {
-	pid_t kitty_pid = -1;
+	pid_t kitty_pid = 0;
 	if( kitty ){ // else should warn of reduced functionality...
 		FILE *fp;
-		int fd;
-		fd = open(kitty, O_RDONLY); // query value written by kc (kittycat)
-		if (fd < 0) {
+		fp = fopen(kitty, "r"); // query value written by kc (kittycat)
+		if (fp == 0) {
 			warn("%s", kitty);
 		}else{
-			kitty_pid = dscanf( fd, "%d" );
-			close( fd );
+			int status = fscanf( fp, "%d", &kitty_pid );
+			fclose( fp );
 		}
 	}
 	return kitty_pid;
 }
+
+
+static void
+parse_request(int rfd)
+{
+	int off;
+	ssize_t nr, np, nw;
+	static size_t bsize = 1024; // assumed header line maximum
+	static char *buf = NULL;
+	struct stat sbuf;
+	char* p;
+	char c;
+	enum parse_state {
+		WANT_METHOD,
+		WANT_TARGET,
+		WANT_VERSION,
+		WANT_HEADER_KEY,
+		WANT_HEADER_VALUE,
+		WANT_BODY,
+		ERROR_STATE
+	} state = WANT_METHOD;
+
+	if ((buf = malloc(bsize)) == NULL)
+		err(1, "buffer");
+	for( p = buf; (nr = read(rfd, buf, bsize)) > 0; ){
+		// NOT sscanf( p, "%s %s %s\n", &method, &target, &version );
+		for( np = 0; np < nr && ( c = *p ) != '\0'; ++p, ++np ){
+			switch( c ){
+			case ' ':
+				switch( state ){
+				case WANT_VERSION:
+				case WANT_HEADER_VALUE:
+				}
+				break;
+			case '\n':
+				switch( state ){
+				case WANT_VERSION:
+				case WANT_HEADER_VALUE:
+					*p = '\0'; // terminate the version or header value
+					state = WANT_HEADER_KEY;
+					break;
+				default:
+					// signal unexpected newline
+					break;
+				}
+				break;
+			default:
+				break;
+			}
+		}
+	}
+	if (nr < 0) {
+		warn("%s", filename);
+		rval = 1;
+	}
+}
+
+static void
+write_http_response( char* version, int status, char* message, char* server, char* content_type, char** other_headers )
+{
+	// HTTP/1.1 200 Everything Is Just Fine
+	// Server: netcat!
+	// Content-Type: text/html; charset=UTF-8
+	// (this line intentionally left blank)
+}
+
+int http_trace( char* message ){
+	return 500;
+}
+
+int http_head( char* message ){
+	return 500;
+}
+
+int http_get( char* message ){
+	return 500;
+}
+
+int http_post( char* message ){
+	return 501; // not implemented
+}
+
+int http_patch( char* message ){
+	return 501; // not implemented
+}
+
+int http_put( char* message ){
+	return 501; // not implemented
+}
+
+int http_options( char* message ){
+	return 501; // not implemented
+}
+
+int http_delete( char* message ){
+	return 501; // not implemented
+}
+
+int http_connect( char* message ){
+	return 501; // not implemented
+}
+
