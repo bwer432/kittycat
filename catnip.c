@@ -311,12 +311,30 @@ parse_request(int rfd)
 		err(1, "buffer");
 	for( p = buf; (nr = read(rfd, buf, bsize)) > 0; ){
 		// NOT sscanf( p, "%s %s %s\n", &method, &target, &version );
+		method = p; // assumption for entering WANT_METHOD
 		for( np = 0; np < nr && ( c = *p ) != '\0'; ++p, ++np ){
 			switch( c ){
 			case ' ':
 				switch( state ){
+				case WANT_METHOD:
+					*p = '\0'; // terminate the method name
+					state = WANT_TARGET;
+					target = p+1; // assumption when entering WANT_TARGET
+					break;
+				case WANT_TARGET:
+					*p = '\0'; // terminate the target (URL or short path)
+					state = WANT_VERSION;
+					version = p+1; // assumption when entering WANT_VERSION
+					break;
 				case WANT_VERSION:
+					// not expecting spaces within the HTTP version
+					// should flag an error
+					break;
+				case WANT_HEADER_KEY:
+					*p = '\0'; 
+					break;
 				case WANT_HEADER_VALUE:
+					break;
 				}
 				break;
 			case '\n':
@@ -330,6 +348,8 @@ parse_request(int rfd)
 					// signal unexpected newline
 					break;
 				}
+				break;
+			case ':':
 				break;
 			default:
 				break;
