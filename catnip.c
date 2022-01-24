@@ -86,7 +86,6 @@ static const char rcsid[] =
 
 int main __P((int, char *[]));
 void nosig __P((char *));
-void printsignals __P((FILE *));
 int signame_to_signum __P((char *));
 void usage __P((void));
 static pid_t read_kitty_marker();
@@ -147,35 +146,20 @@ main(argc, argv)
 	int errors, numsig, pid; // pid of kc (kittycat) or other process to signal
 	char *ep;
 	char *kitty; // kc (kittycat) signal file
+	char *head;  // http response header
+	char *body;  // body: html document, image, etc.
 
-	if (argc < 2)
+	if (argc < 1)
 		usage();
 
 	numsig = SIGCONT;	// catnip defaults to SIGCONT unlike kill's default SIGTERM;
 	kitty = ".kc"; // warning: default does not support concurrency in shared file namespace
 	pid = read_kitty_marker( kitty );
+	head = "response.http"; // default response header output file path
+	body = "body";		// default body output file path
 
 	argc--, argv++;
-	if (!strcmp(*argv, "-l")) {
-		argc--, argv++;
-		if (argc > 1)
-			usage();
-		if (argc == 1) {
-			if (!isdigit(**argv))
-				usage();
-			numsig = strtol(*argv, &ep, 10);
-			if (!**argv || *ep)
-				errx(1, "illegal signal number: %s", *argv);
-			if (numsig >= 128)
-				numsig -= 128;
-			if (numsig <= 0 || numsig >= NSIG)
-				nosig(*argv);
-			printf("%s\n", sys_signame[numsig]);
-			exit(0);
-		}
-		printsignals(stdout);
-		exit(0);
-	}
+	// removed support for -l option; use kill(1) with -l to list signals
 
 	if (!strcmp(*argv, "-s")) {
 		argc--, argv++;
@@ -252,35 +236,18 @@ nosig(name)
 	char *name;
 {
 
-	warnx("unknown signal %s; valid signals:", name);
-	printsignals(stderr);
+	warnx("unknown signal %s.", name);
 	exit(1);
 }
 
-void
-printsignals(fp)
-	FILE *fp;
-{
-	int n;
-
-	for (n = 1; n < NSIG; n++) {
-		(void)fprintf(fp, "%s", sys_signame[n]);
-		if (n == (NSIG / 2) || n == (NSIG - 1))
-			(void)fprintf(fp, "\n");
-		else
-			(void)fprintf(fp, " ");
-	}
-}
+// removed void printsignals( FILE* fp ) from cn(1); use the one in kill(1)
 
 void
 usage()
 {
 
 	(void)fprintf(stderr, "%s\n%s\n%s\n%s\n",
-		"usage: kill [-s signal_name] pid ...",
-		"       kill -l [exit_status]",
-		"       kill -signal_name pid ...",
-		"       kill -signal_number pid ...");
+		"usage: cn [-k kitty_cat_file] [{-s signal_name | -signal_name | -signal_number}] [head [body]]");
 	exit(1);
 }
 
@@ -336,6 +303,7 @@ parse_request(int rfd)
 	char*	hv;
 	char*	server;
 	char*	port;
+	char*	body;
 	struct method_action* map; // method-action-pointer = map
 	struct version_map* vp; 
 	int	e; // error code
@@ -343,6 +311,7 @@ parse_request(int rfd)
 	if ((buf = malloc(bsize)) == NULL)
 		err(1, "buffer");
 	for( p = buf; (nr = read(rfd, buf, bsize)) > 0; ){
+		fprintf( stderr, "read %ld bytes\n", nr );
 		// NOT sscanf( p, "%s %s %s\n", &method, &target, &version );
 		state = WANT_METHOD; // that's how the request begins
 		method = p; // assumption for entering WANT_METHOD
@@ -352,10 +321,11 @@ parse_request(int rfd)
 		hv = NULL;
 		server = NULL;
 		port = NULL;
+		body = NULL;
 		map = NULL; // method-action pointer
 		vp = NULL; // version-map pointer
 		e = 0; // presumed innocent
-		for( np = 0; np < nr && ( c = *p ) != '\0' && e; ++p, ++np ){
+		for( np = 0; np < nr && ( c = *p ) != '\0' && !e && state != WANT_BODY; ++p, ++np ){
 			switch( c ){
 			case ' ':
 				switch( state ){
@@ -388,6 +358,8 @@ parse_request(int rfd)
 					break;
 				case WANT_HEADER_KEY:
 					*p = '\0'; // this is *after* the colon hopefully
+					state = WANT_HEADER_VALUE;
+					hv = p+1; // set up to accumulate value next
 					break;
 				case WANT_HEADER_VALUE:
 					// let them accumulate within the value
@@ -434,8 +406,10 @@ parse_request(int rfd)
 					break;
 				case WANT_HEADER_KEY:
 					// if at very beginning, is beginning of body
-					if( p == hk )
+					if( p == hk ){
 						state = WANT_BODY;
+						body = p+1;
+					}
 					else
 						e = 400; // bad request - null header value
 					break;
@@ -452,7 +426,7 @@ parse_request(int rfd)
 		}
 		if( e ){
 			// some error in parsing
-			fprintf( stderr, "got error code %d while parsing\n", e );
+			fprintf( stderr, "got error code %d while parsing, state = %d\n", e, state );
 			break;
 		}
 	}
@@ -461,6 +435,13 @@ parse_request(int rfd)
 	if( target != NULL )fprintf( stderr, "target=%s; ", target );
 	if( version != NULL )fprintf( stderr, "version=%s; ", version );
 	fprintf( stderr, "\n" );
+	if( e == 0 && state == WANT_BODY ){
+		if( map != NULL ){
+			fprintf( stderr, "catnip: trying action %s\n", map->method );
+			e = (*map->action)( body );
+			fprintf( stderr, "catnip: back from action %s, e = %d\n", map->method, e );
+		}
+	}
 }
 
 static void
