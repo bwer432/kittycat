@@ -4,7 +4,7 @@
  *  https://opensource.apple.com/source/shell_cmds/shell_cmds-187/kill/kill.c
  * on 2022-01-16
  *
- * scanfiles() and raw_cat() brought in from cat.c via kittycat.c 2022-01-24
+ * raw_cat() brought in from cat.c via kittycat.c 2022-01-24
  * original sourced from same site as kill.c above.
  *
  * MIT License
@@ -69,12 +69,17 @@ static char const copyright[] =
 	The Regents of the University of California.  All rights reserved.\n";
 #endif /* not lint */
 
+// reflect multiple heritage - cat(1) like kittycat(1), and kill(1) for catnip(1)
+
 #ifndef lint
 #if 0
 static char sccsid[] = "@(#)kill.c	8.4 (Berkeley) 4/28/95";
+static char sccsid2[] = "@(#)cat.c	8.2 (Berkeley) 4/27/95";
 #endif
 static const char rcsid[] =
   "$FreeBSD: src/bin/kill/kill.c,v 1.11.2.1 2001/08/01 02:42:56 obrien Exp $";
+static const char rcsid2[] =
+  "$FreeBSD: src/bin/cat/cat.c,v 1.32 2005/01/10 08:39:20 imp Exp $";
 #endif /* not lint */
 
 #include <ctype.h>
@@ -146,48 +151,63 @@ main(argc, argv)
 	int argc;
 	char *argv[];
 {
+	int ch;
 	int errors, numsig, pid; // pid of kc (kittycat) or other process to signal
 	char *ep;
 	char *kitty; // kc (kittycat) signal file
 	char *head;  // http response header
 	char *body;  // body: html document, image, etc.
+	int  head_fd;
+	int  body_fd;
 
 	if (argc < 1)
 		usage();
 
 	numsig = SIGCONT;	// catnip defaults to SIGCONT unlike kill's default SIGTERM;
 	kitty = ".kc"; // warning: default does not support concurrency in shared file namespace
-	pid = read_kitty_marker( kitty );
 	head = "response.http"; // default response header output file path
 	body = "body";		// default body output file path
-
 
 	while ((ch = getopt(argc, argv, "k:s:")) != -1)
 		switch (ch) {
 		case 'k': 			/* kitty rendezvous path */
-			++kflag;		/* why? for debugging. it's not like it changes behavior */
 			kitty = optarg;
 			break;
 		case 's':			/* kitty signal name/number */
-			if (isalpha(**argv)) {
-				if ((numsig = signame_to_signum(*argv)) < 0)
-					nosig(*argv);
-			} else if (isdigit(**argv)) {
-				numsig = strtol(*argv, &ep, 10);
-				if (!**argv || *ep)
-					errx(1, "illegal signal number: %s", *argv);
+			if (isalpha(*optarg)) {
+				if ((numsig = signame_to_signum(optarg)) < 0)
+					nosig(optarg);
+			} else if (isdigit(*optarg)) {
+				numsig = strtol(optarg, &ep, 10);
+				if (!*optarg || *ep)
+					errx(1, "illegal signal number: %s", optarg);
 				if (numsig < 0 || numsig >= NSIG)
-					nosig(*argv);
+					nosig(optarg);
 			} else
-				nosig(*argv);
+				nosig(optarg);
 			break;
 		default:
 			usage();
 		}
+	argc -= optind;
 	argv += optind;
 
+	pid = read_kitty_marker( kitty );
+	printf( "catnip: argc = %d, pid = %d, numsig = %d, kitty = %s, head = %s, body = %s\n", argc, pid, numsig, kitty, head, body );
+// %%% TODO %%%
+#ifdef NOTYET
+		filename = path; // from argv[0] or argv[1]
+		fd = open(path, O_RDONLY);
+		if (fd < 0) {
+			warn("%s", path);
+			rval = 1;
+		} else {
+			raw_cat(fd);
+			close(fd);
+		}
+#endif /* defined(NOTYET) */
+
 	parse_request( STDIN_FILENO );
-	scanfiles(argv, 0);
 
 	for (errors = 0; argc; argc--, argv++) {
 		pid = strtol(*argv, &ep, 10);
@@ -235,7 +255,7 @@ usage()
 	// removing support for [{-s signal_name | -signal_name | -signal_number}]
 	// in favor of simply [-s {signal_name|signal_number}], for we're merely *derived* from kill(1)
 	// *not* forward compatible.
-	(void)fprintf(stderr, "%s\n%s\n%s\n%s\n",
+	(void)fprintf(stderr, "%s\n",
 		"usage: cn [-k kitty_cat_file] [-s {signal_name|signal_number}] [head [body]]");
 	exit(1);
 }
@@ -443,50 +463,7 @@ write_http_response( char* version, int status, char* message, char* server, cha
 }
 
 
-static void
-scanfiles(char *argv[], int cooked)
-{
-	int i = 0;
-	char *path;
-	FILE *fp;
-
-	while ((path = argv[i]) != NULL || i == 0) {
-		int fd;
-
-		wait_for_catnip(); // kittycat extension
-		if (path == NULL || strcmp(path, "-") == 0) {
-			filename = "stdin";
-			fd = STDIN_FILENO;
-		} else {
-			filename = path;
-			fd = open(path, O_RDONLY);
-#ifndef NO_UDOM_SUPPORT
-			if (fd < 0 && errno == EOPNOTSUPP)
-				fd = udom_open(path, O_RDONLY);
-#endif
-		}
-		if (fd < 0) {
-			warn("%s", path);
-			rval = 1;
-		} else if (cooked) {
-			if (fd == STDIN_FILENO)
-				cook_cat(stdin);
-			else {
-				fp = fdopen(fd, "r");
-				cook_cat(fp);
-				fclose(fp);
-			}
-		} else {
-			raw_cat(fd);
-			if (fd != STDIN_FILENO)
-				close(fd);
-		}
-		if (path == NULL)
-			break;
-		++i;
-	}
-}
-
+#ifdef NOTYET
 static void
 raw_cat(int rfd)
 {
@@ -513,6 +490,7 @@ raw_cat(int rfd)
 		rval = 1;
 	}
 }
+#endif /* defined(NOTYET) */
 
 int http_trace( char* message ){
 	return 500;
