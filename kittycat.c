@@ -176,7 +176,7 @@ main(int argc, char *argv[])
 static void
 usage(void)
 {
-	fprintf(stderr, "usage: cat [-benstuv] [file ...]\n");
+	fprintf(stderr, "usage: kc [-benstuv] [-k  kitty_rendezvous_file] [-w kitty_catnap_wait_time] [file ...]\n");
 	exit(1);
 	/* NOTREACHED */
 }

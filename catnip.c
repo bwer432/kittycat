@@ -4,6 +4,9 @@
  *  https://opensource.apple.com/source/shell_cmds/shell_cmds-187/kill/kill.c
  * on 2022-01-16
  *
+ * scanfiles() and raw_cat() brought in from cat.c via kittycat.c 2022-01-24
+ * original sourced from same site as kill.c above.
+ *
  * MIT License
  * 
  * Copyright (c) 2022 Brad Werner
@@ -158,49 +161,33 @@ main(argc, argv)
 	head = "response.http"; // default response header output file path
 	body = "body";		// default body output file path
 
-	argc--, argv++;
-	// removed support for -l option; use kill(1) with -l to list signals
 
-	if (!strcmp(*argv, "-s")) {
-		argc--, argv++;
-		if (argc < 1) {
-			warnx("option requires an argument -- s");
+	while ((ch = getopt(argc, argv, "k:s:")) != -1)
+		switch (ch) {
+		case 'k': 			/* kitty rendezvous path */
+			++kflag;		/* why? for debugging. it's not like it changes behavior */
+			kitty = optarg;
+			break;
+		case 's':			/* kitty signal name/number */
+			if (isalpha(**argv)) {
+				if ((numsig = signame_to_signum(*argv)) < 0)
+					nosig(*argv);
+			} else if (isdigit(**argv)) {
+				numsig = strtol(*argv, &ep, 10);
+				if (!**argv || *ep)
+					errx(1, "illegal signal number: %s", *argv);
+				if (numsig < 0 || numsig >= NSIG)
+					nosig(*argv);
+			} else
+				nosig(*argv);
+			break;
+		default:
 			usage();
 		}
-		if (strcmp(*argv, "0")) {
-			if ((numsig = signame_to_signum(*argv)) < 0)
-				nosig(*argv);
-		} else
-			numsig = 0;
-		argc--, argv++;
-	} else if (!strcmp(*argv, "-k")) { /* kitty rendezvous path */
-		argc--, argv++;
-		if (argc < 1) {
-			warnx("option requires an argument -- k");
-			usage();
-		}
-		kitty = *argv; // assign kittycat PID file path
-		argc--, argv++;
-	} else if (**argv == '-') {
-		++*argv;
-		if (isalpha(**argv)) {
-			if ((numsig = signame_to_signum(*argv)) < 0)
-				nosig(*argv);
-		} else if (isdigit(**argv)) {
-			numsig = strtol(*argv, &ep, 10);
-			if (!**argv || *ep)
-				errx(1, "illegal signal number: %s", *argv);
-			if (numsig < 0 || numsig >= NSIG)
-				nosig(*argv);
-		} else
-			nosig(*argv);
-		argc--, argv++;
-	}
-
-	if (argc == 0)
-		usage();
+	argv += optind;
 
 	parse_request( STDIN_FILENO );
+	scanfiles(argv, 0);
 
 	for (errors = 0; argc; argc--, argv++) {
 		pid = strtol(*argv, &ep, 10);
@@ -245,9 +232,11 @@ nosig(name)
 void
 usage()
 {
-
+	// removing support for [{-s signal_name | -signal_name | -signal_number}]
+	// in favor of simply [-s {signal_name|signal_number}], for we're merely *derived* from kill(1)
+	// *not* forward compatible.
 	(void)fprintf(stderr, "%s\n%s\n%s\n%s\n",
-		"usage: cn [-k kitty_cat_file] [{-s signal_name | -signal_name | -signal_number}] [head [body]]");
+		"usage: cn [-k kitty_cat_file] [-s {signal_name|signal_number}] [head [body]]");
 	exit(1);
 }
 
@@ -451,6 +440,78 @@ write_http_response( char* version, int status, char* message, char* server, cha
 	// Server: netcat!
 	// Content-Type: text/html; charset=UTF-8
 	// (this line intentionally left blank)
+}
+
+
+static void
+scanfiles(char *argv[], int cooked)
+{
+	int i = 0;
+	char *path;
+	FILE *fp;
+
+	while ((path = argv[i]) != NULL || i == 0) {
+		int fd;
+
+		wait_for_catnip(); // kittycat extension
+		if (path == NULL || strcmp(path, "-") == 0) {
+			filename = "stdin";
+			fd = STDIN_FILENO;
+		} else {
+			filename = path;
+			fd = open(path, O_RDONLY);
+#ifndef NO_UDOM_SUPPORT
+			if (fd < 0 && errno == EOPNOTSUPP)
+				fd = udom_open(path, O_RDONLY);
+#endif
+		}
+		if (fd < 0) {
+			warn("%s", path);
+			rval = 1;
+		} else if (cooked) {
+			if (fd == STDIN_FILENO)
+				cook_cat(stdin);
+			else {
+				fp = fdopen(fd, "r");
+				cook_cat(fp);
+				fclose(fp);
+			}
+		} else {
+			raw_cat(fd);
+			if (fd != STDIN_FILENO)
+				close(fd);
+		}
+		if (path == NULL)
+			break;
+		++i;
+	}
+}
+
+static void
+raw_cat(int rfd)
+{
+	int off, wfd;
+	ssize_t nr, nw;
+	static size_t bsize;
+	static char *buf = NULL;
+	struct stat sbuf;
+
+	wfd = fileno(stdout);
+	if (buf == NULL) {
+		if (fstat(wfd, &sbuf))
+			err(1, "%s", filename);
+		bsize = MAX(sbuf.st_blksize, 1024);
+		if ((buf = malloc(bsize)) == NULL)
+			err(1, "buffer");
+	}
+	while ((nr = read(rfd, buf, bsize)) > 0)
+		for (off = 0; nr; nr -= nw, off += nw)
+			if ((nw = write(wfd, buf + off, (size_t)nr)) < 0)
+				err(1, "stdout");
+	if (nr < 0) {
+		warn("%s", filename);
+		rval = 1;
+	}
 }
 
 int http_trace( char* message ){
