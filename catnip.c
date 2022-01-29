@@ -97,21 +97,22 @@ void nosig __P((char *));
 int signame_to_signum __P((char *));
 void usage __P((void));
 static pid_t read_kitty_marker();
-static void parse_request(int);
+static void parse_request(int, int, int);
+static void write_http_response( int head_fd, char* version, int status, char* message, char* content_type, char** other_headers );
 
-int http_trace( char* message );
-int http_head( char* message );
-int http_get( char* message );
-int http_post( char* message );
-int http_patch( char* message );
-int http_put( char* message );
-int http_options( char* message );
-int http_delete( char* message );
-int http_connect( char* message );
+int http_trace( int body_fd, char* request_body, int length );
+int http_head( int body_fd, char* request_body, int length );
+int http_get( int body_fd, char* request_body, int length );
+int http_post( int body_fd, char* request_body, int length );
+int http_patch( int body_fd, char* request_body, int length );
+int http_put( int body_fd, char* request_body, int length );
+int http_options( int body_fd, char* request_body, int length );
+int http_delete( int body_fd, char* request_body, int length );
+int http_connect( int body_fd, char* request_body, int length );
 
 struct method_action {
 	char* method;
-	int (*action)( char* message );
+	int (*action)( int body_fd, char* request_body, int length );
 };
 
 struct method_action http_methods[] = {
@@ -193,29 +194,45 @@ main(argc, argv)
 	argv += optind;
 
 	pid = read_kitty_marker( kitty );
+	// printf( "catnip: argc = %d, pid = %d, numsig = %d, kitty = %s, head = %s, body = %s\n", argc, pid, numsig, kitty, head, body );
+	if( argc >= 1 ){
+		head = *argv++;
+		--argc;
+	}
+	if( argc >= 1 ){
+		body = *argv++;
+		--argc;
+	}
 	printf( "catnip: argc = %d, pid = %d, numsig = %d, kitty = %s, head = %s, body = %s\n", argc, pid, numsig, kitty, head, body );
-// %%% TODO %%%
-#ifdef NOTYET
-		filename = path; // from argv[0] or argv[1]
-		fd = open(path, O_RDONLY);
-		if (fd < 0) {
-			warn("%s", path);
-			rval = 1;
-		} else {
-			raw_cat(fd);
-			close(fd);
-		}
-#endif /* defined(NOTYET) */
 
-	parse_request( STDIN_FILENO );
+	head_fd = open(head, O_WRONLY|O_CREAT|O_TRUNC, 0600); // allow kc to pick up contents of response header
+	if (head_fd < 0) {
+		warn("%s", head);
+		errors = 1;
+	} 
 
-	for (errors = 0; argc; argc--, argv++) {
-		pid = strtol(*argv, &ep, 10);
-		if (!**argv || *ep) {
-			warnx("illegal process id: %s", *argv);
+	body_fd = open(body, O_WRONLY|O_CREAT|O_TRUNC, 0600); // allow kc to pick up contents of body
+	if (body_fd < 0) {
+		warn("%s", body);
+		errors = 1;
+	} 
+
+	parse_request( STDIN_FILENO, head_fd, body_fd );
+
+	// nip the kittycat once for header
+	close(head_fd);
+	if( pid ){
+		if (kill(pid, numsig) == -1) {
+			warn("signalling %s", head);
 			errors = 1;
-		} else if (kill(pid, numsig) == -1) {
-			warn("%s", *argv);
+		}
+	}
+
+	// nip the kittycat again for body
+	close(body_fd);
+	if( pid ){
+		if (kill(pid, numsig) == -1) {
+			warn("signalling %s", body);
 			errors = 1;
 		}
 	}
@@ -284,9 +301,19 @@ read_kitty_marker( char* kitty )
 	return kitty_pid;
 }
 
-
+/*
+ * Parse the input stream from:
+ * - nc (netcat)
+ * - kc (kittycat) | nc (netcat)
+ * - anywhere else (e.g. file redirect)
+ * for an HTTP request.
+ * Then call the appropriate handler per the method in the request.
+ * Output any data to the head and body output files.
+ * The caller opened those files, will close them when we return, and will signal 
+ * any upstream process such as kc (kittycat).
+ */
 static void
-parse_request(int rfd)
+parse_request(int rfd, int head_fd, int body_fd)
 {
 	int off;
 	ssize_t nr, np, nw;
@@ -313,12 +340,21 @@ parse_request(int rfd)
 	char*	server;
 	char*	port;
 	char*	body;
+	char*	message;
+	char*	content_type;
+	char**	other_headers;
 	struct method_action* map; // method-action-pointer = map
 	struct version_map* vp; 
 	int	e; // error code
 
 	if ((buf = malloc(bsize)) == NULL)
 		err(1, "buffer");
+	//
+	// BUF-BUG: though originally intended to chain buffers for multiple reads, only one buffer is tracked
+	// in this current implementation. subsequent reads will overwrite the old data, rendering all
+	// references into it invalid after the first pass. handling requests with large headers or 
+	// body of any significant size are *not* currently supported.
+	//
 	for( p = buf; (nr = read(rfd, buf, bsize)) > 0; ){
 		fprintf( stderr, "read %ld bytes\n", nr );
 		// NOT sscanf( p, "%s %s %s\n", &method, &target, &version );
@@ -331,6 +367,9 @@ parse_request(int rfd)
 		server = NULL;
 		port = NULL;
 		body = NULL;
+		message = NULL;
+		content_type = NULL;
+		other_headers = NULL;
 		map = NULL; // method-action pointer
 		vp = NULL; // version-map pointer
 		e = 0; // presumed innocent
@@ -351,7 +390,7 @@ parse_request(int rfd)
 					}
 					if( map->method == NULL ){
 						// no match
-						map = NULL;
+						map = NULL; // simplifies check later
 						e = 400; // bad request: method
 					}
 					break;
@@ -438,6 +477,8 @@ parse_request(int rfd)
 			fprintf( stderr, "got error code %d while parsing, state = %d\n", e, state );
 			break;
 		}
+		// TEMPORARY, or PERMANENT, see BUF-BUG note.
+		break; // because BUF-BUG mentioned at top does not allow multiple buf, we cannot allow overwrite!
 	}
 	fprintf( stderr, "catnip: request parsing summary; " );
 	if( method != NULL )fprintf( stderr, "method=%s; ", method );
@@ -446,20 +487,62 @@ parse_request(int rfd)
 	fprintf( stderr, "\n" );
 	if( e == 0 && state == WANT_BODY ){
 		if( map != NULL ){
+			reset_response_headers();
 			fprintf( stderr, "catnip: trying action %s\n", map->method );
-			e = (*map->action)( body );
+			e = (*map->action)( body_fd, body, nr - (p - buf) );
 			fprintf( stderr, "catnip: back from action %s, e = %d\n", map->method, e );
+			write_http_response( head_fd, version, e, message, content_type, other_headers );
 		}
 	}
+	// be sure to save all data to either the response header file or the body output file
+	// because this ship is going down...
+	if( buf != NULL )
+		free( buf );
 }
 
+// globals. ew!
+#define CATNIP_MAX_RESPONSE_HEADERS 16
+int response_header_count;
+struct key_value_pair {
+	char*	key;
+	char*	value;
+};
+struct key_value_pair response_headers[CATNIP_MAX_RESPONSE_HEADERS];
+
+void reset_response_headers(){
+	response_header_count = 0;
+}
+
+void add_response_header( char* key, char* value ){
+	if( response_header_count < CATNIP_MAX_RESPONSE_HEADERS ){
+		struct key_value_pair* kvp;
+		kvp = &response_headers[response_header_count];
+		kvp->key = malloc( strlen( key ) + 1 );
+		kvp->value = malloc( strlen( value ) + 1 );
+		if( kvp->key == NULL || kvp->value == NULL )
+			break; // silently return for now: BUG
+		strcpy( kvp->key, key );
+		strcpy( kvp->value, value );
+		++response_header_count;
+	}
+	// else silently drop for now: BUG
+}
+
+// Write a response to the "header" channel - perhaps to be relayed by kc to nc:
+//
+// HTTP/1.1 200 Everything Is Just Fine
+// Server: netcat!
+// Content-Type: text/html; charset=UTF-8
+// (this line intentionally left blank)
 static void
-write_http_response( char* version, int status, char* message, char* server, char* content_type, char** other_headers )
+write_http_response( int head_fd, char* version, int status, char* message, char* content_type, char** other_headers )
 {
-	// HTTP/1.1 200 Everything Is Just Fine
-	// Server: netcat!
-	// Content-Type: text/html; charset=UTF-8
-	// (this line intentionally left blank)
+	dprintf( head_fd, "%s %d %s\n", version, status, message == NULL ? "nominal" : message );
+	dprintf( head_fd, "Server: catnip (cn) 0.0.1\n" );
+	dprintf( head_fd, "Content-Type: %s\n", content_type == NULL ? "text/html; charset=UTF-8" : content_type );
+	// consider other headers too? which request headers should also be response headers?
+	// which additional headers should be added in? such as size? 
+	dprintf( head_fd, "\n" ); // done with the headers, on to the body! (well, the end of this file, let kc cat them)
 }
 
 
@@ -492,39 +575,78 @@ raw_cat(int rfd)
 }
 #endif /* defined(NOTYET) */
 
-int http_trace( char* message ){
+int http_trace( int body_fd, char* request_body, int length ){
+	write( body_fd, request_body, length ); // that's all she wrote
+	return 200;
+}
+
+int http_head( int body_fd, char* request_body, int length ){
+	// there is no body, only head
+	int e;
+	char* path;
+	struct stat docstat;
+	char statbuf[32]; // temporary number to string conversion
+	path = "index.html"; // need to get context from request...
+	switch( e = access( path, F_OK|R_OK ) ){
+	case 0:
+		break;
+	case -1:
+		switch( errno ){
+		case ENOENT:
+			return 404;
+		case EACCES:
+			return 403;
+		default:
+			return 500;
+		}
+		break;
+	}
+	switch( e = stat( path, &docstat ) ){
+	case 0:
+		sprintf( statbuf, "%d", docstat.st_size );
+		add_response_header( "Content-Length", statbuf ); // that will copy, we can reuse statbuf
+		break;
+	case -1:
+		break;
+	}
+		// docstat.st_mode
+         // mode_t   st_mode;   /* inode protection mode */
+         // uid_t    st_uid;    /* user-id of owner */
+         // gid_t    st_gid;    /* group-id of owner */
+         // struct timespec st_atimespec;  /* time of last access */
+         // struct timespec st_mtimespec;  /* time of last data modification */
+         // struct timespec st_ctimespec;  /* time of last file status change */
+         // off_t    st_size;   /* file size, in bytes */
+
+	return 200;
+}
+
+int http_get( int body_fd, char* request_body, int length ){
+	//NOTYET: -- and want to invert this really --  raw_cat(body_fd);
 	return 500;
 }
 
-int http_head( char* message ){
-	return 500;
-}
-
-int http_get( char* message ){
-	return 500;
-}
-
-int http_post( char* message ){
+int http_post( int body_fd, char* request_body, int length ){
 	return 501; // not implemented
 }
 
-int http_patch( char* message ){
+int http_patch( int body_fd, char* request_body, int length ){
 	return 501; // not implemented
 }
 
-int http_put( char* message ){
+int http_put( int body_fd, char* request_body, int length ){
 	return 501; // not implemented
 }
 
-int http_options( char* message ){
+int http_options( int body_fd, char* request_body, int length ){
 	return 501; // not implemented
 }
 
-int http_delete( char* message ){
+int http_delete( int body_fd, char* request_body, int length ){
 	return 501; // not implemented
 }
 
-int http_connect( char* message ){
+int http_connect( int body_fd, char* request_body, int length ){
 	return 501; // not implemented
 }
 
