@@ -86,6 +86,8 @@ static const char rcsid2[] =
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>	// catnip for open, read, write, close, etc.
+#include <sys/stat.h>   // for stat used in borrowed cat and header gen
+#include <time.h>	// for mtime in stat
 #include <unistd.h>	// catnip for open, read, write, close, etc.
 #include <signal.h>
 #include <stdio.h>
@@ -98,6 +100,9 @@ int signame_to_signum __P((char *));
 void usage __P((void));
 static pid_t read_kitty_marker();
 static void parse_request(int, int, int);
+void reset_response_headers();
+void add_response_header( char* key, char* value );
+void write_response_headers( int head_fd );
 static void write_http_response( int head_fd, char* version, int status, char* message, char* content_type, char** other_headers );
 
 int http_trace( int body_fd, char* request_body, int length );
@@ -485,6 +490,7 @@ parse_request(int rfd, int head_fd, int body_fd)
 	if( target != NULL )fprintf( stderr, "target=%s; ", target );
 	if( version != NULL )fprintf( stderr, "version=%s; ", version );
 	fprintf( stderr, "\n" );
+	fprintf( stderr, "e = %d, state = %d, map = %d\n", e, state, (int)map ); // debug
 	if( e == 0 && state == WANT_BODY ){
 		if( map != NULL ){
 			reset_response_headers();
@@ -520,12 +526,18 @@ void add_response_header( char* key, char* value ){
 		kvp->key = malloc( strlen( key ) + 1 );
 		kvp->value = malloc( strlen( value ) + 1 );
 		if( kvp->key == NULL || kvp->value == NULL )
-			break; // silently return for now: BUG
+			return; // silently return for now: BUG, & leak: should free other
 		strcpy( kvp->key, key );
 		strcpy( kvp->value, value );
 		++response_header_count;
 	}
 	// else silently drop for now: BUG
+}
+
+void write_response_headers( int head_fd ){
+	for( int i = 0; i < response_header_count; ++i ){
+		dprintf( head_fd, "%s: %s\n", response_headers[i].key, response_headers[i].value );
+	}
 }
 
 // Write a response to the "header" channel - perhaps to be relayed by kc to nc:
@@ -542,6 +554,7 @@ write_http_response( int head_fd, char* version, int status, char* message, char
 	dprintf( head_fd, "Content-Type: %s\n", content_type == NULL ? "text/html; charset=UTF-8" : content_type );
 	// consider other headers too? which request headers should also be response headers?
 	// which additional headers should be added in? such as size? 
+	write_response_headers( head_fd );
 	dprintf( head_fd, "\n" ); // done with the headers, on to the body! (well, the end of this file, let kc cat them)
 }
 
@@ -585,7 +598,8 @@ int http_head( int body_fd, char* request_body, int length ){
 	int e;
 	char* path;
 	struct stat docstat;
-	char statbuf[32]; // temporary number to string conversion
+	struct tm   tm, *resulttm;
+	char statbuf[64]; // temporary number to string conversion
 	path = "index.html"; // need to get context from request...
 	switch( e = access( path, F_OK|R_OK ) ){
 	case 0:
@@ -603,10 +617,22 @@ int http_head( int body_fd, char* request_body, int length ){
 	}
 	switch( e = stat( path, &docstat ) ){
 	case 0:
-		sprintf( statbuf, "%d", docstat.st_size );
+		sprintf( statbuf, "%lld", docstat.st_size );
 		add_response_header( "Content-Length", statbuf ); // that will copy, we can reuse statbuf
+		resulttm = gmtime_r( &docstat.st_mtimespec.tv_sec, &tm );
+		if( resulttm != NULL ){
+			int l;
+			l = strftime( statbuf, 64, "%a, %d %b %Y %H:%M:%S %Z", &tm );
+			if( l ){
+				add_response_header( "Date", statbuf );
+			}
+		}
+		// want other headers? 
+		// what about content type - a *simple* suffix to type assumption table?
+		fprintf( stderr, "HEAD got okay stat.\n" );
 		break;
 	case -1:
+		fprintf( stderr, "HEAD got stat = %d, errno = %d\n", e, errno );
 		break;
 	}
 		// docstat.st_mode
