@@ -306,37 +306,17 @@ read_kitty_marker( char* kitty )
 	return kitty_pid;
 }
 
-/*
- * Parse the input stream from:
- * - nc (netcat)
- * - kc (kittycat) | nc (netcat)
- * - anywhere else (e.g. file redirect)
- * for an HTTP request.
- * Then call the appropriate handler per the method in the request.
- * Output any data to the head and body output files.
- * The caller opened those files, will close them when we return, and will signal 
- * any upstream process such as kc (kittycat).
- */
-static void
-parse_request(int rfd, int head_fd, int body_fd)
-{
-	int off;
-	ssize_t nr, np, nw;
-	static size_t bsize = 4096; // assumed header line maximum
-	static char *buf = NULL;
-	char* p;
-	char c;
-	enum parse_state {
-		WANT_METHOD,
-		WANT_TARGET,
-		WANT_VERSION,
-		WANT_HEADER_KEY,
-		WANT_HEADER_VALUE,
-		WANT_BODY,
-		ERROR_STATE
-	} state;
+enum http_parse_state {
+	WANT_METHOD,
+	WANT_TARGET,
+	WANT_VERSION,
+	WANT_HEADER_KEY,
+	WANT_HEADER_VALUE,
+	WANT_BODY,
+	ERROR_STATE
+};
 
-	// pointers to request components should be in a struct
+struct http_request {
 	char*	method;
 	char*	target;
 	char*	version;
@@ -351,74 +331,115 @@ parse_request(int rfd, int head_fd, int body_fd)
 	struct method_action* map; // method-action-pointer = map
 	struct version_map* vp; 
 	int	e; // error code
+	enum http_parse_state state;
+	// buffer allocation and population
+	ssize_t nr, np;
+	size_t bsize; // assumed header line maximum
+	char *buf;
+};
 
-	if ((buf = malloc(bsize)) == NULL)
-		err(1, "buffer");
+struct http_request* alloc_http_request(){
+	struct http_request* req;
+	
+	if((req = malloc(sizeof(struct http_request))) == NULL)
+		err(1, "struct");
+	else{
+		req->bsize = 4096; // assumed header line maximum
+		req->buf = NULL;
+		if((req->buf = malloc(req->bsize)) == NULL)
+			err(1, "buffer");
+		else{
+			req->state = WANT_METHOD; // that's how the request begins
+			req->method = NULL; 
+			req->target = NULL;
+			req->version = NULL;
+			req->hk = NULL;
+			req->hv = NULL;
+			req->server = NULL;
+			req->port = NULL;
+			req->body = NULL;
+			req->message = NULL;
+			req->content_type = NULL;
+			req->other_headers = NULL;
+			req->map = NULL; // method-action pointer
+			req->vp = NULL; // version-map pointer
+			req->e = 0; // presumed innocent
+		}
+	}
+	return req;
+}
+
+/*
+ * Parse the input stream from:
+ * - nc (netcat)
+ * - kc (kittycat) | nc (netcat)
+ * - anywhere else (e.g. file redirect)
+ * for an HTTP request.
+ * Then call the appropriate handler per the method in the request.
+ * Output any data to the head and body output files.
+ * The caller opened those files, will close them when we return, and will signal 
+ * any upstream process such as kc (kittycat).
+ */
+static void
+parse_request(int rfd, int head_fd, int body_fd)
+{
+	struct http_request* req;
+	char* p;
+	char c;
+
+	if( ( req = alloc_http_request() ) == NULL || req->buf == NULL )
+		return;
 	//
 	// BUF-BUG: though originally intended to chain buffers for multiple reads, only one buffer is tracked
 	// in this current implementation. subsequent reads will overwrite the old data, rendering all
 	// references into it invalid after the first pass. handling requests with large headers or 
 	// body of any significant size are *not* currently supported.
 	//
-	for( p = buf; (nr = read(rfd, buf, bsize)) > 0; ){
-		fprintf( stderr, "read %ld bytes\n", nr );
+	for( p = req->buf; (req->nr = read(rfd, req->buf, req->bsize)) > 0; ){
+		fprintf( stderr, "read %ld bytes\n", req->nr );
+		req->method = p; // assumption for entering WANT_METHOD
 		// NOT sscanf( p, "%s %s %s\n", &method, &target, &version );
-		state = WANT_METHOD; // that's how the request begins
-		method = p; // assumption for entering WANT_METHOD
-		target = NULL;
-		version = NULL;
-		hk = NULL;
-		hv = NULL;
-		server = NULL;
-		port = NULL;
-		body = NULL;
-		message = NULL;
-		content_type = NULL;
-		other_headers = NULL;
-		map = NULL; // method-action pointer
-		vp = NULL; // version-map pointer
-		e = 0; // presumed innocent
-		for( np = 0; np < nr && ( c = *p ) != '\0' && !e && state != WANT_BODY; ++p, ++np ){
+		for( req->np = 0; req->np < req->nr && ( c = *p ) != '\0' && !req->e && req->state != WANT_BODY; ++p, ++req->np ){
 			switch( c ){
 			case ' ':
-				switch( state ){
+				switch( req->state ){
 				case WANT_METHOD:
 					*p = '\0'; // terminate the method name
-					state = WANT_TARGET;
-					target = p+1; // assumption when entering WANT_TARGET
+					req->state = WANT_TARGET;
+					req->target = p+1; // assumption when entering WANT_TARGET
 					// check method at this point
-					for( map = http_methods; map && map->method != NULL; ++map ){
-						if( strcmp( method, map->method ) == 0 ){
+					for( req->map = http_methods; req->map && req->map->method != NULL; ++req->map ){
+						if( strcmp( req->method, req->map->method ) == 0 ){
 							// we have a winner, retain map value
 							break;
 						}
 					}
-					if( map->method == NULL ){
+					if( req->map->method == NULL ){
 						// no match
-						map = NULL; // simplifies check later
-						e = 400; // bad request: method
+						req->map = NULL; // simplifies check later
+						req->e = 400; // bad request: method
 					}
 					break;
 				case WANT_TARGET:
 					*p = '\0'; // terminate the target (URL or short path)
-					state = WANT_VERSION;
-					version = p+1; // assumption when entering WANT_VERSION
+					req->state = WANT_VERSION;
+					req->version = p+1; // assumption when entering WANT_VERSION
 					break;
 				case WANT_VERSION:
 					// not expecting spaces within the HTTP version
 					// should flag an error
-					e = 505; // unsupported version, or 400 bad request
+					req->e = 505; // unsupported version, or 400 bad request
 					break;
 				case WANT_HEADER_KEY:
 					*p = '\0'; // this is *after* the colon hopefully
-					state = WANT_HEADER_VALUE;
-					hv = p+1; // set up to accumulate value next
+					req->state = WANT_HEADER_VALUE;
+					req->hv = p+1; // set up to accumulate value next
 					break;
 				case WANT_HEADER_VALUE:
 					// let them accumulate within the value
-					if( p == hv ){ // except
+					if( p == req->hv ){ // except
 						*p = '\0'; // eat the leading space
-						hv = p+1; // as it is ignored
+						req->hv = p+1; // as it is ignored
 					}
 					break;
 				case WANT_BODY:
@@ -430,45 +451,45 @@ parse_request(int rfd, int head_fd, int body_fd)
 				}
 				break;
 			case '\n':
-				switch( state ){
+				switch( req->state ){
 				case WANT_VERSION:
 					*p = '\0'; // terminate the version 
-					state = WANT_HEADER_KEY;
-					hk = p+1; // assuming a header-key comes next
+					req->state = WANT_HEADER_KEY;
+					req->hk = p+1; // assuming a header-key comes next
 					// check version at this point
-					for( vp = http_versions; vp && vp->version != NULL; ++vp ){
-						if( strcmp( version, vp->version ) == 0 ){
+					for( req->vp = http_versions; req->vp && req->vp->version != NULL; ++req->vp ){
+						if( strcmp( req->version, req->vp->version ) == 0 ){
 							// we have a winner, retain vp value
 							break;
 						}
 					}
-					if( vp->version == NULL ){
+					if( req->vp->version == NULL ){
 						// no match
-						vp = NULL;
-						e = 505; // unsupported version
+						req->vp = NULL;
+						req->e = 505; // unsupported version
 					}
 					break;
 				case WANT_HEADER_VALUE:
 					*p = '\0'; // terminate the header value
-					state = WANT_HEADER_KEY;
+					req->state = WANT_HEADER_KEY;
 					// preprocess this header now - must save (hk,hv)
-					fprintf( stderr, "catnip: should process header: (%s,%s)\n", hk, hv );
-					state = WANT_HEADER_KEY; // get set for the next one
-					hk = p+1; // assuming a header-key comes next
-					hv = NULL;
+					fprintf( stderr, "catnip: should process header: (%s,%s)\n", req->hk, req->hv );
+					req->state = WANT_HEADER_KEY; // get set for the next one
+					req->hk = p+1; // assuming a header-key comes next
+					req->hv = NULL;
 					break;
 				case WANT_HEADER_KEY:
 					// if at very beginning, is beginning of body
-					if( p == hk ){
-						state = WANT_BODY;
-						body = p+1;
+					if( p == req->hk ){
+						req->state = WANT_BODY;
+						req->body = p+1;
 					}
 					else
-						e = 400; // bad request - null header value
+						req->e = 400; // bad request - null header value
 					break;
 				default:
 					// signal unexpected newline
-					e = 400; // bad request - malformed
+					req->e = 400; // bad request - malformed
 					break;
 				}
 				break;
@@ -477,33 +498,35 @@ parse_request(int rfd, int head_fd, int body_fd)
 				break;
 			}
 		}
-		if( e ){
+		if( req->e ){
 			// some error in parsing
-			fprintf( stderr, "got error code %d while parsing, state = %d\n", e, state );
+			fprintf( stderr, "got error code %d while parsing, state = %d\n", req->e, req->state );
 			break;
 		}
 		// TEMPORARY, or PERMANENT, see BUF-BUG note.
 		break; // because BUF-BUG mentioned at top does not allow multiple buf, we cannot allow overwrite!
 	}
 	fprintf( stderr, "catnip: request parsing summary; " );
-	if( method != NULL )fprintf( stderr, "method=%s; ", method );
-	if( target != NULL )fprintf( stderr, "target=%s; ", target );
-	if( version != NULL )fprintf( stderr, "version=%s; ", version );
+	if( req->method != NULL )fprintf( stderr, "method=%s; ", req->method );
+	if( req->target != NULL )fprintf( stderr, "target=%s; ", req->target );
+	if( req->version != NULL )fprintf( stderr, "version=%s; ", req->version );
 	fprintf( stderr, "\n" );
-	fprintf( stderr, "e = %d, state = %d, map = %d\n", e, state, (int)map ); // debug
-	if( e == 0 && state == WANT_BODY ){
-		if( map != NULL ){
+	fprintf( stderr, "e = %d, state = %d, map = %ld\n", req->e, req->state, (long)req->map ); // debug
+	if( req->e == 0 && req->state == WANT_BODY ){
+		if( req->map != NULL ){
 			reset_response_headers();
-			fprintf( stderr, "catnip: trying action %s\n", map->method );
-			e = (*map->action)( body_fd, body, nr - (p - buf) );
-			fprintf( stderr, "catnip: back from action %s, e = %d\n", map->method, e );
-			write_http_response( head_fd, version, e, message, content_type, other_headers );
+			fprintf( stderr, "catnip: trying action %s\n", req->map->method );
+			req->e = (*req->map->action)( body_fd, req->body, req->nr - (p - req->buf) );
+			fprintf( stderr, "catnip: back from action %s, e = %d\n", req->map->method, req->e );
+			write_http_response( head_fd, req->version, req->e, req->message, req->content_type, req->other_headers );
 		}
 	}
 	// be sure to save all data to either the response header file or the body output file
 	// because this ship is going down...
-	if( buf != NULL )
-		free( buf );
+	if( req->buf != NULL )
+		free( req->buf );
+	if( req != NULL )
+		free( req );
 }
 
 // globals. ew!
