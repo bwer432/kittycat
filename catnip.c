@@ -94,6 +94,8 @@ static const char rcsid2[] =
 #include <stdlib.h>
 #include <string.h>
 
+#include "catnip.h"	// for http_parse_state and http_request
+
 int main __P((int, char *[]));
 void nosig __P((char *));
 int signame_to_signum __P((char *));
@@ -105,20 +107,16 @@ void add_response_header( char* key, char* value );
 void write_response_headers( int head_fd );
 static void write_http_response( int head_fd, char* version, int status, char* message, char* content_type, char** other_headers );
 
-int http_trace( int body_fd, char* request_body, int length );
-int http_head( int body_fd, char* request_body, int length );
-int http_get( int body_fd, char* request_body, int length );
-int http_post( int body_fd, char* request_body, int length );
-int http_patch( int body_fd, char* request_body, int length );
-int http_put( int body_fd, char* request_body, int length );
-int http_options( int body_fd, char* request_body, int length );
-int http_delete( int body_fd, char* request_body, int length );
-int http_connect( int body_fd, char* request_body, int length );
-
-struct method_action {
-	char* method;
-	int (*action)( int body_fd, char* request_body, int length );
-};
+// prior version of action methods took ( int body_fd, char* request_body, int length )
+int http_trace( int body_fd, struct http_request* req );
+int http_head( int body_fd, struct http_request* req );
+int http_get( int body_fd, struct http_request* req );
+int http_post( int body_fd, struct http_request* req );
+int http_patch( int body_fd, struct http_request* req );
+int http_put( int body_fd, struct http_request* req );
+int http_options( int body_fd, struct http_request* req );
+int http_delete( int body_fd, struct http_request* req );
+int http_connect( int body_fd, struct http_request* req );
 
 struct method_action http_methods[] = {
 	{ "TRACE",	http_trace },
@@ -131,18 +129,6 @@ struct method_action http_methods[] = {
 	{ "DELETE", 	http_delete },
 	{ "CONNECT", 	http_connect },
 	{ NULL,		0 }
-};
-
-enum http_version { // singular
-	HTTP_1_0,
-	HTTP_1_1,
-	HTTP_2_0,
-	HTTP_VERSION_UNKNOWN
-};
-
-struct version_map {
-	char* version;
-	enum http_version http_version;
 };
 
 struct version_map http_versions[] = { // plural
@@ -305,38 +291,6 @@ read_kitty_marker( char* kitty )
 	}
 	return kitty_pid;
 }
-
-enum http_parse_state {
-	WANT_METHOD,
-	WANT_TARGET,
-	WANT_VERSION,
-	WANT_HEADER_KEY,
-	WANT_HEADER_VALUE,
-	WANT_BODY,
-	ERROR_STATE
-};
-
-struct http_request {
-	char*	method;
-	char*	target;
-	char*	version;
-	char*	hk;
-	char*	hv;
-	char*	server;
-	char*	port;
-	char*	body;
-	char*	message;
-	char*	content_type;
-	char**	other_headers;
-	struct method_action* map; // method-action-pointer = map
-	struct version_map* vp; 
-	int	e; // error code
-	enum http_parse_state state;
-	// buffer allocation and population
-	ssize_t nr, np;
-	size_t bsize; // assumed header line maximum
-	char *buf;
-};
 
 struct http_request* alloc_http_request(){
 	struct http_request* req;
@@ -516,7 +470,9 @@ parse_request(int rfd, int head_fd, int body_fd)
 		if( req->map != NULL ){
 			reset_response_headers();
 			fprintf( stderr, "catnip: trying action %s\n", req->map->method );
-			req->e = (*req->map->action)( body_fd, req->body, req->nr - (p - req->buf) );
+			req->body_length = req->nr - (p - req->buf);
+			// old method action took ( body_fd, req->body, req->nr - (p - req->buf) )
+			req->e = (*req->map->action)( body_fd, req );
 			fprintf( stderr, "catnip: back from action %s, e = %d\n", req->map->method, req->e );
 			write_http_response( head_fd, req->version, req->e, req->message, req->content_type, req->other_headers );
 		}
@@ -611,12 +567,12 @@ raw_cat(int rfd)
 }
 #endif /* defined(NOTYET) */
 
-int http_trace( int body_fd, char* request_body, int length ){
-	write( body_fd, request_body, length ); // that's all she wrote
+int http_trace( int body_fd, struct http_request* req ){
+	write( body_fd, req->body, req->body_length ); // that's all she wrote
 	return 200;
 }
 
-int http_head( int body_fd, char* request_body, int length ){
+int http_head( int body_fd, struct http_request* req ){
 	// there is no body, only head
 	int e;
 	char* path;
@@ -670,32 +626,32 @@ int http_head( int body_fd, char* request_body, int length ){
 	return 200;
 }
 
-int http_get( int body_fd, char* request_body, int length ){
+int http_get( int body_fd, struct http_request* req ){
 	//NOTYET: -- and want to invert this really --  raw_cat(body_fd);
 	return 500;
 }
 
-int http_post( int body_fd, char* request_body, int length ){
+int http_post( int body_fd, struct http_request* req ){
 	return 501; // not implemented
 }
 
-int http_patch( int body_fd, char* request_body, int length ){
+int http_patch( int body_fd, struct http_request* req ){
 	return 501; // not implemented
 }
 
-int http_put( int body_fd, char* request_body, int length ){
+int http_put( int body_fd, struct http_request* req ){
 	return 501; // not implemented
 }
 
-int http_options( int body_fd, char* request_body, int length ){
+int http_options( int body_fd, struct http_request* req ){
 	return 501; // not implemented
 }
 
-int http_delete( int body_fd, char* request_body, int length ){
+int http_delete( int body_fd, struct http_request* req ){
 	return 501; // not implemented
 }
 
-int http_connect( int body_fd, char* request_body, int length ){
+int http_connect( int body_fd, struct http_request* req ){
 	return 501; // not implemented
 }
 
