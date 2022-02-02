@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>catnip (cn) example doc</title>
+    </head>
+    <body>
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+        <script>
+            mermaid.initialize({ startOnLoad: true });
+        </script>
+
+        Here is a rough depiction of <code>kc response.http body | nc -l 8000 | cn</code>,
+        where <code>kc</code> is kittycat, 
+        <code>nc</code> is the classic netcat, and
+        <code>cn</code> is catnip.
+        <div class="mermaid">
+            graph LR 
+            A[kittycat] --> B[netcat] 
+            B --> C[catnip] 
+            subgraph files
+                D[response.http]
+                E[body]
+            end
+            C --> D
+            D --> A
+            C --> E
+            E --> A
+        </div>
+
+        <p>kc (kittycat) pipes to nc (netcat) which pipes to cn (catnip).
+        <ol>
+            <li>netcat gets network request (e.g. HTTP GET)</li>
+            <li>which is piped to catnip</li>
+            <li>catnip attempts to (rudimentarily) process HTTP request</li>
+            <li>and writes response.http and body files</li>
+            <li>and signals kittycat</li>
+            <li>kittycat awakes when nipped by catnip</li>
+            <li>and cats files (as any good cat does)</li>
+            <li>which are piped to netcat</li>
+            <li>which responds over the network</li>
+        </ol>
+	<p>voila. the second-dumbest web server than netcat alone.
+    </body>
+</html>

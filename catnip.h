@@ -31,6 +31,9 @@ struct http_request {
 	ssize_t nr, np;
 	size_t bsize; // assumed header line maximum
 	char *buf;
+	// action context
+	char*	webroot; // webroot "kitty" or other
+	int	usefork; // use fork/chroot instead of path stripping
 };
 
 struct method_action {

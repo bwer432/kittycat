@@ -101,7 +101,7 @@ void nosig __P((char *));
 int signame_to_signum __P((char *));
 void usage __P((void));
 static pid_t read_kitty_marker();
-static void parse_request(int, int, int);
+static void parse_request(int, int, int, char*, int);
 void reset_response_headers();
 void add_response_header( char* key, char* value );
 void write_response_headers( int head_fd );
@@ -151,6 +151,8 @@ main(argc, argv)
 	char *body;  // body: html document, image, etc.
 	int  head_fd;
 	int  body_fd;
+	char *webroot; // kitty (instead of www or webroot etc.)
+	int  usefork;  // use fork/chroot instead of path stripping
 
 	if (argc < 1)
 		usage();
@@ -159,9 +161,15 @@ main(argc, argv)
 	kitty = ".kc"; // warning: default does not support concurrency in shared file namespace
 	head = "response.http"; // default response header output file path
 	body = "body";		// default body output file path
+	webroot = "kitty";	// default web root instead of www
+	usefork = 0;		// use path stripping by default, can use fork/chroot instead
 
-	while ((ch = getopt(argc, argv, "k:s:")) != -1)
+	while ((ch = getopt(argc, argv, "fk:s:w:")) != -1)
 		switch (ch) {
+		case 'f':
+			++usefork;		/* use fork/chroot instead of path stripping */
+			fprintf( stderr, "catnip: fork/chroot style not yet implemented.\n" );
+			break;
 		case 'k': 			/* kitty rendezvous path */
 			kitty = optarg;
 			break;
@@ -178,6 +186,9 @@ main(argc, argv)
 			} else
 				nosig(optarg);
 			break;
+		case 'w':			/* kitty webroot */
+			webroot = optarg;
+			break;
 		default:
 			usage();
 		}
@@ -185,6 +196,7 @@ main(argc, argv)
 	argv += optind;
 
 	pid = read_kitty_marker( kitty );
+	// could check for webroot here, but for trace and others we don't need it
 	// printf( "catnip: argc = %d, pid = %d, numsig = %d, kitty = %s, head = %s, body = %s\n", argc, pid, numsig, kitty, head, body );
 	if( argc >= 1 ){
 		head = *argv++;
@@ -208,7 +220,7 @@ main(argc, argv)
 		errors = 1;
 	} 
 
-	parse_request( STDIN_FILENO, head_fd, body_fd );
+	parse_request( STDIN_FILENO, head_fd, body_fd, webroot, usefork );
 
 	// nip the kittycat once for header
 	close(head_fd);
@@ -264,7 +276,7 @@ usage()
 	// in favor of simply [-s {signal_name|signal_number}], for we're merely *derived* from kill(1)
 	// *not* forward compatible.
 	(void)fprintf(stderr, "%s\n",
-		"usage: cn [-k kitty_cat_file] [-s {signal_name|signal_number}] [head [body]]");
+		"usage: cn [-f] [-k kitty_cat_file] [-s {signal_name|signal_number}] [-w webroot] [head [body]]");
 	exit(1);
 }
 
@@ -335,7 +347,7 @@ struct http_request* alloc_http_request(){
  * any upstream process such as kc (kittycat).
  */
 static void
-parse_request(int rfd, int head_fd, int body_fd)
+parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 {
 	struct http_request* req;
 	char* p;
@@ -343,6 +355,8 @@ parse_request(int rfd, int head_fd, int body_fd)
 
 	if( ( req = alloc_http_request() ) == NULL || req->buf == NULL )
 		return;
+	req->webroot = webroot;
+	req->usefork = usefork;
 	//
 	// BUF-BUG: though originally intended to chain buffers for multiple reads, only one buffer is tracked
 	// in this current implementation. subsequent reads will overwrite the old data, rendering all
@@ -537,6 +551,54 @@ write_http_response( int head_fd, char* version, int status, char* message, char
 	dprintf( head_fd, "\n" ); // done with the headers, on to the body! (well, the end of this file, let kc cat them)
 }
 
+/*
+ * if we are running in fork/chroot mode, then we can just use our webroot 
+ * as the chroot path, such as "kitty" which should just be effectively 
+ * "./kitty" as a relative path to the present working directory from
+ * which we (cn) were run. certainly, if we are running in-process without
+ * the forking, we could merely catenate (oh, the humanity, er, felinity?)
+ * our webroot (e.g. "kitty" or "www" or "webroot") to the target path, 
+ * thus:
+ *	/		--> kitty/
+ *	/index.html	--> kitty/index.html
+ *	/css/style.css	--> kitty/css/style.css
+ *	/image/my.png	--> kitty/image/my.png
+ * and should we allow these? or handle those differently?
+ *	http://localhost--> kittyhttp://localhost
+ *	http://x:8080	--> kittyhttp://x:8080
+ * however, without stripping, someone could give us a lovely url including
+ * a path such as ../../usr/local/bin/cn or some such nonsense, and with
+ * just the prefixing we would have kitty/../../usr/local/bin/cn or whatever
+ * which taint a whole bag of tricks better than just using the target verbatim.
+ *
+ * also, do we imply index.html or default.htm or those beauteous assumptions
+ * in this realm of kittycat and catnip? let's say yes for now, but just 
+ * index.html for now and not a list we check for existence nor as a parameter.
+ *
+ * which all begs the question, are we (wrangle_path) responsible for
+ * vetting the paths with stat and such or do we just leave that to the 
+ * action methods themselves?
+ */
+char* wrangle_path( struct http_request* req ){
+	char* herded_path = NULL;
+	char* default_doc = "index.html"; // should really be a parameter
+	// length of / (1) --> kitty/index.html\0 (17)
+	int   effective_length = strlen( req->webroot ) + strlen( req->target ) + strlen( default_doc ) + 2; // has margin if not default_doc...
+	fprintf( stderr, "into wrangle: target=%s\n", req->target );
+	if( ( herded_path = malloc( effective_length ) ) == NULL ){
+		req->e = 500; // not enough memory for path
+	}
+	else{
+		char* p;
+		if( !req->usefork )
+			strcpy( herded_path, req->webroot );
+		strcat( herded_path, req->target );
+		if( ( p = strrchr( herded_path, '/' ) ) != NULL && p[1] == '\0' ) // ends with /
+			strcat( herded_path, default_doc );
+		fprintf( stderr, "wrangle out: %s\n", herded_path );
+}
+	return herded_path;
+}
 
 #ifdef NOTYET
 static void
@@ -569,6 +631,7 @@ raw_cat(int rfd)
 
 int http_trace( int body_fd, struct http_request* req ){
 	write( body_fd, req->body, req->body_length ); // that's all she wrote
+	req->message = "OK";
 	return 200;
 }
 
@@ -579,17 +642,20 @@ int http_head( int body_fd, struct http_request* req ){
 	struct stat docstat;
 	struct tm   tm, *resulttm;
 	char statbuf[64]; // temporary number to string conversion
-	path = "index.html"; // need to get context from request...
+	path = wrangle_path( req );
 	switch( e = access( path, F_OK|R_OK ) ){
 	case 0:
 		break;
 	case -1:
 		switch( errno ){
 		case ENOENT:
+			req->message = "Not Found";
 			return 404;
 		case EACCES:
+			req->message = "Forbidden";
 			return 403;
 		default:
+			req->message = "Internal Server Error";
 			return 500;
 		}
 		break;
@@ -622,36 +688,43 @@ int http_head( int body_fd, struct http_request* req ){
          // struct timespec st_mtimespec;  /* time of last data modification */
          // struct timespec st_ctimespec;  /* time of last file status change */
          // off_t    st_size;   /* file size, in bytes */
-
+	req->message = "OK";
 	return 200;
 }
 
 int http_get( int body_fd, struct http_request* req ){
 	//NOTYET: -- and want to invert this really --  raw_cat(body_fd);
+	req->message = "Internal Server Error";
 	return 500;
 }
 
 int http_post( int body_fd, struct http_request* req ){
+	req->message = "Not Implemented";
 	return 501; // not implemented
 }
 
 int http_patch( int body_fd, struct http_request* req ){
+	req->message = "Not Implemented";
 	return 501; // not implemented
 }
 
 int http_put( int body_fd, struct http_request* req ){
+	req->message = "Not Implemented";
 	return 501; // not implemented
 }
 
 int http_options( int body_fd, struct http_request* req ){
+	req->message = "Not Implemented";
 	return 501; // not implemented
 }
 
 int http_delete( int body_fd, struct http_request* req ){
+	req->message = "Not Implemented";
 	return 501; // not implemented
 }
 
 int http_connect( int body_fd, struct http_request* req ){
+	req->message = "Not Implemented";
 	return 501; // not implemented
 }
 
