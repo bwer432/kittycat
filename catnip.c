@@ -369,6 +369,9 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 		// NOT sscanf( p, "%s %s %s\n", &method, &target, &version );
 		for( req->np = 0; req->np < req->nr && ( c = *p ) != '\0' && !req->e && req->state != WANT_BODY; ++p, ++req->np ){
 			switch( c ){
+			case '\r': // need to change some logic if this is real - percolated up!
+				*p = '\0'; // terminate any field, ahead of '\n'
+				break; // but do *NOT* change state...
 			case ' ':
 				switch( req->state ){
 				case WANT_METHOD:
@@ -386,6 +389,7 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 						// no match
 						req->map = NULL; // simplifies check later
 						req->e = 400; // bad request: method
+						req->message = "Bad Request - method";
 					}
 					break;
 				case WANT_TARGET:
@@ -420,7 +424,6 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 				}
 				break;
 			case '\n':
-			case '\r': // need to change some logic if this is real
 				switch( req->state ){
 				case WANT_VERSION:
 					*p = '\0'; // terminate the version 
@@ -457,12 +460,15 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 						req->state = WANT_BODY;
 						req->body = p+1;
 					}
-					else
+					else {
 						req->e = 400; // bad request - null header value
+						req->message = "Bad Request - null header";
+					}
 					break;
 				default:
 					// signal unexpected newline
 					req->e = 400; // bad request - malformed
+					req->message = "Bad Request - unexpected newline";
 					break;
 				}
 				break;
@@ -493,9 +499,9 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 			// old method action took ( body_fd, req->body, req->nr - (p - req->buf) )
 			req->e = (*req->map->action)( body_fd, req );
 			fprintf( stderr, "catnip: back from action %s, e = %d\n", req->map->method, req->e );
-			write_http_response( head_fd, req->version, req->e, req->message, req->content_type, req->other_headers );
 		}
 	}
+	write_http_response( head_fd, req->version, req->e, req->message, req->content_type, req->other_headers );
 	// be sure to save all data to either the response header file or the body output file
 	// because this ship is going down...
 	if( req->buf != NULL )
