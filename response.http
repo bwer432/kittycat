@@ -1,6 +1,6 @@
-HTTP/1.1 200 nominal
+HTTP/1.1 200 OK
 Server: catnip (cn) 0.0.1
 Content-Type: text/html; charset=UTF-8
 Content-Length: 1198
-Date: Wed, 02 Feb 2022 07:33:55 UTC
+Date: Wed, 02 Feb 2022 22:16:32 UTC
 

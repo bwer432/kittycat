@@ -396,6 +396,7 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 				case WANT_VERSION:
 					// not expecting spaces within the HTTP version
 					// should flag an error
+					fprintf( stderr, "spaces within http version\n" );
 					req->e = 505; // unsupported version, or 400 bad request
 					break;
 				case WANT_HEADER_KEY:
@@ -419,13 +420,16 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 				}
 				break;
 			case '\n':
+			case '\r': // need to change some logic if this is real
 				switch( req->state ){
 				case WANT_VERSION:
 					*p = '\0'; // terminate the version 
 					req->state = WANT_HEADER_KEY;
 					req->hk = p+1; // assuming a header-key comes next
 					// check version at this point
+					fprintf( stderr, "checking http version %s;\n", req->version );
 					for( req->vp = http_versions; req->vp && req->vp->version != NULL; ++req->vp ){
+						fprintf( stderr, "is http version %s?\n", req->vp->version );
 						if( strcmp( req->version, req->vp->version ) == 0 ){
 							// we have a winner, retain vp value
 							break;
@@ -433,6 +437,7 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 					}
 					if( req->vp->version == NULL ){
 						// no match
+						fprintf( stderr, "no matching http version for %s;\n", req->version );
 						req->vp = NULL;
 						req->e = 505; // unsupported version
 					}
@@ -478,8 +483,8 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 	if( req->method != NULL )fprintf( stderr, "method=%s; ", req->method );
 	if( req->target != NULL )fprintf( stderr, "target=%s; ", req->target );
 	if( req->version != NULL )fprintf( stderr, "version=%s; ", req->version );
-	fprintf( stderr, "\n" );
-	fprintf( stderr, "e = %d, state = %d, map = %ld\n", req->e, req->state, (long)req->map ); // debug
+	fprintf( stderr, ";\n" );
+	fprintf( stderr, "e = %d, state = %d, map = %ld;\n", req->e, req->state, (long)req->map ); // debug
 	if( req->e == 0 && req->state == WANT_BODY ){
 		if( req->map != NULL ){
 			reset_response_headers();
@@ -596,38 +601,43 @@ char* wrangle_path( struct http_request* req ){
 		if( ( p = strrchr( herded_path, '/' ) ) != NULL && p[1] == '\0' ) // ends with /
 			strcat( herded_path, default_doc );
 		fprintf( stderr, "wrangle out: %s\n", herded_path );
-}
+	}
 	return herded_path;
 }
 
-#ifdef NOTYET
-static void
-raw_cat(int rfd)
+/* 
+ * inherited from cat.c as noted at the top:
+ * raw_cat() brought in from cat.c via kittycat.c 2022-01-24
+ * but now we're making it more like cp since we're taking both rfd and wfd 
+ * in and not assuming wfd = fileno(stdout) as the inherited one had done in cat.
+ */
+static int
+raw_cat(char* filename, int rfd, int wfd) // are you a copy *of* a cat or are you a cp *for* a cat? 
 {
-	int off, wfd;
+	int off;
 	ssize_t nr, nw;
 	static size_t bsize;
 	static char *buf = NULL;
 	struct stat sbuf;
+	int rval = 0;
 
-	wfd = fileno(stdout);
 	if (buf == NULL) {
 		if (fstat(wfd, &sbuf))
 			err(1, "%s", filename);
-		bsize = MAX(sbuf.st_blksize, 1024);
+		bsize = sbuf.st_blksize > 1024 ? sbuf.st_blksize : 1024; // old school instead of MAX
 		if ((buf = malloc(bsize)) == NULL)
 			err(1, "buffer");
 	}
 	while ((nr = read(rfd, buf, bsize)) > 0)
 		for (off = 0; nr; nr -= nw, off += nw)
 			if ((nw = write(wfd, buf + off, (size_t)nr)) < 0)
-				err(1, "stdout");
+				err(1, "body");
 	if (nr < 0) {
 		warn("%s", filename);
 		rval = 1;
 	}
+	return rval;
 }
-#endif /* defined(NOTYET) */
 
 int http_trace( int body_fd, struct http_request* req ){
 	write( body_fd, req->body, req->body_length ); // that's all she wrote
@@ -693,9 +703,37 @@ int http_head( int body_fd, struct http_request* req ){
 }
 
 int http_get( int body_fd, struct http_request* req ){
-	//NOTYET: -- and want to invert this really --  raw_cat(body_fd);
-	req->message = "Internal Server Error";
-	return 500;
+	int e;
+	char* path;
+	int doc_fd;
+	switch( e = http_head( body_fd, req ) ){
+	/* case 403: */
+	/* case 404: */
+	/* case 500: */
+	default: // all of the above
+		return e;
+	case 200:
+		// had already done this in http_head(), can we borrow? (e.g. stash in req before relayed back to us)
+		path = wrangle_path( req ); 
+		doc_fd = open( path, O_RDONLY );
+		if( doc_fd < 0 ){
+			// why, when http_head cleared it? 
+			// *should* interpret errno here and give more guidance than 500...
+			req->message = "Internal Server Error";
+			e = 500;
+		}
+		else{
+			// now would be the time to check usefork and do the fork()/chroot() here
+			// alas, not yet...
+			// inverting use of raw_cat - instead of going to stdout, we use it like cp would
+			if( raw_cat( path, doc_fd, body_fd ) ){  // or want req->target instead of path?
+				req->message = "Internal Server Error - raw_cat"; // distinguish it
+				e = 500;
+			}
+			close( doc_fd );
+		}
+	}
+	return e;
 }
 
 int http_post( int body_fd, struct http_request* req ){
