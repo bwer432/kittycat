@@ -195,7 +195,7 @@ main(argc, argv)
 	argc -= optind;
 	argv += optind;
 
-	pid = read_kitty_marker( kitty );
+	pid = 0; // for now. we had a race condition when we called read_kitty_marker() here.
 	// could check for webroot here, but for trace and others we don't need it
 	// printf( "catnip: argc = %d, pid = %d, numsig = %d, kitty = %s, head = %s, body = %s\n", argc, pid, numsig, kitty, head, body );
 	if( argc >= 1 ){
@@ -224,6 +224,7 @@ main(argc, argv)
 
 	// nip the kittycat once for header
 	close(head_fd);
+	pid = read_kitty_marker( kitty ); // moved down here because of race condition
 	if( pid ){
 		if (kill(pid, numsig) == -1) {
 			warn("signalling %s", head);
@@ -461,6 +462,8 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 						req->body = p+1;
 					}
 					else {
+						*p = '\0'; // terminate only to show error
+						fprintf( stderr, "null header value, k=[%s]\n", req->hk );
 						req->e = 400; // bad request - null header value
 						req->message = "Bad Request - null header";
 					}
