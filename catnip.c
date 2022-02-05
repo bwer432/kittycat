@@ -225,6 +225,7 @@ main(argc, argv)
 	// nip the kittycat once for header
 	close(head_fd);
 	pid = read_kitty_marker( kitty ); // moved down here because of race condition
+	fprintf( stderr, "going to signal (nip) pid=%d\n", pid );
 	if( pid ){
 		if (kill(pid, numsig) == -1) {
 			warn("signalling %s", head);
@@ -366,12 +367,18 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 	//
 	for( p = req->buf; (req->nr = read(rfd, req->buf, req->bsize)) > 0; ){
 		fprintf( stderr, "read %ld bytes\n", req->nr );
+		for( int i = 0; i < req->nr; ++i ){
+			fprintf( stderr, "%2x ", req->buf[i] );
+		}
+		fprintf( stderr, ";\n" );
 		req->method = p; // assumption for entering WANT_METHOD
 		// NOT sscanf( p, "%s %s %s\n", &method, &target, &version );
 		for( req->np = 0; req->np < req->nr && ( c = *p ) != '\0' && !req->e && req->state != WANT_BODY; ++p, ++req->np ){
 			switch( c ){
 			case '\r': // need to change some logic if this is real - percolated up!
 				*p = '\0'; // terminate any field, ahead of '\n'
+				if( req->hk == p )
+					++req->hk;
 				break; // but do *NOT* change state...
 			case ' ':
 				switch( req->state ){
