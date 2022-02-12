@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Kubernetes Control Plane</title>
+    </head>
+    <body>
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+        <script>
+            mermaid.initialize({ startOnLoad: true });
+        </script>
+
+        Here is one mermaid diagram:
+        <div class="mermaid">
+            graph LR 
+            A([kubectl]) --> B[kube-apiserver] 
+            B --> C[(etcd)]
+            B --> D[controller manager] & E[cloud controller manager]
+            B --> F[kube-scheduler]
+        </div>
+
+        <p>kc (kittycat) pipes to nc (netcat) which pipes to cn (catnip).
+        <ol>
+            <li>netcat gets network request (e.g. HTTP GET)</li>
+            <li>which is piped to catnip</li>
+            <li>catnip attempts to (rudimentarily) process HTTP request</li>
+            <li>and writes response.http and body files</li>
+            <li>and signals kittycat</li>
+            <li>kittycat awakes when nipped by catnip</li>
+            <li>and cats files (as any good cat does)</li>
+            <li>which are piped to netcat</li>
+            <li>which responds over the network</li>
+        </ol>
+	<p>voila. the second-dumbest web server than netcat alone.
+        <div class="mermaid">
+            graph LR 
+            A([kubectl]) --> B[kube-apiserver] 
+            subgraph C[control plane]
+                B --> D[(etcd)]
+                B --> E[controller manager] & F[cloud controller manager]
+                B --> G[kube-scheduler]
+            end
+        </div>
+    </body>
+</html>
