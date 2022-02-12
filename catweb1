@@ -1,0 +1,2 @@
+#!/bin/sh
+./kc -w 10 response.http body | nc -l 8000 | ./cn  &
