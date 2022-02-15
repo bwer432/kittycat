@@ -1,4 +1,4 @@
-FROM alpine AS build-stage
+FROM alpine 
 RUN apk update && apk add curl && apk add build-base
 RUN mkdir /src
 WORKDIR /src
@@ -9,13 +9,8 @@ RUN cc -c kittycat.c \
     && cc -static -o cn catnip.o
 RUN cp cn /usr/bin/
 RUN cp kc /usr/bin/
-
-FROM alpine
-RUN apk update && apk add curl
-COPY --from=build-stage /usr/bin/cn /usr/bin
-COPY --from=build-stage /usr/bin/kc /usr/bin
 WORKDIR /var/local/kitty
 COPY kitty/* ./
-CMD ["sh","-c","kc -w 86400 response.http body | nc -l 80 | cn -w /var/local/kitty"]
-EXPOSE 80
+CMD ["sh","-c","kc -w 86400 response.http body | nc -l 8000 | cn -w /var/local/kitty"]
+EXPOSE 8000
 
