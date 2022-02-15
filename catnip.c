@@ -96,10 +96,10 @@ static const char rcsid2[] =
 
 #include "catnip.h"	// for http_parse_state and http_request
 
-int main __P((int, char *[]));
-void nosig __P((char *));
-int signame_to_signum __P((char *));
-void usage __P((void));
+int main(int, char *[]);
+void nosig(char *);
+int signame_to_signum(char *);
+void usage(void);
 static pid_t read_kitty_marker();
 static void parse_request(int, int, int, char*, int);
 void reset_response_headers();
@@ -254,7 +254,7 @@ signame_to_signum(sig)
 	if (!strncasecmp(sig, "sig", (size_t)3))
 		sig += 3;
 	for (n = 1; n < NSIG; n++) {
-		if (!strcasecmp(sys_siglist[n], sig))
+		if (!strcasecmp(strsignal(n), sig)) // not sys_siglist[n], 
 			return (n);
 	}
 	return (-1);
@@ -688,7 +688,7 @@ int http_head( int body_fd, struct http_request* req ){
 	}
 	switch( e = stat( path, &docstat ) ){
 	case 0:
-		sprintf( statbuf, "%lld", docstat.st_size );
+		sprintf( statbuf, "%ld", docstat.st_size ); // or %lld for macos and amazon linux
 		add_response_header( "Content-Length", statbuf ); // that will copy, we can reuse statbuf
 		resulttm = gmtime_r( &docstat.st_mtim.tv_sec, &tm );
 		if( resulttm != NULL ){
