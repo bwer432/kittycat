@@ -100,7 +100,7 @@ int kflag; // kittycat (kc) extensions
 int rval;
 const char *filename;
 const char *kitty;       // path to kitty marker (PID file) that facilitates signalling us
-// sigset_t kitty_catnip_invulnerabilities; // catnip (or other origin) signals to ignore
+struct sigaction kitty_catnip_handler; // catnip (or other origin) signals to handle
 struct timespec kitty_catnap_request;    // set .tv_sec or .tv_nsec to requested nap time
 struct timespec kitty_catnap_remainder;  // side effect of nanosleep() for premature wake
 
@@ -110,6 +110,7 @@ static void cook_cat(FILE *);
 static void raw_cat(int);
 static void create_kitty_marker();
 static void parse_timespec( char* wait_time, struct timespec* result );
+static void ready_for_catnip();
 static void wait_for_catnip();
 
 #ifndef NO_UDOM_SUPPORT
@@ -123,10 +124,10 @@ main(int argc, char *argv[])
 
 	setlocale(LC_CTYPE, "");
 	kitty = ".kc"; // warning: default does not support concurrency in shared file namespace
-	// kitty_catnip_invulnerabilities = 0; or loop for sizeof()
 	kitty_catnap_request.tv_sec = 0;
 	kitty_catnap_request.tv_nsec = 250000000; // default to quarter second
 
+	ready_for_catnip();    // kittycat catches catnip signals
 	create_kitty_marker(); // kittycat extension for backwash signalling along pipeline
 	while ((ch = getopt(argc, argv, "benstuvk:w:")) != -1)
 		switch (ch) {
@@ -412,14 +413,36 @@ parse_timespec( char* wait_time, struct timespec* result )
  * should be passed context, but in keeping with the cat(1) we're incorporating into,
  * we instead use dependencies (ick) on global variables (joy).
  *
- * 	sigset_t kitty_catnip_invulnerabilities; // catnip (or other origin) signals to ignore
+ *      struct sigaction kitty_catnip_handler;   // catnip (or other origin) signals to handle
  * 	struct timespec kitty_catnap_request;    // set .tv_sec or .tv_nsec to requested nap time
  * 	struct timespec kitty_catnap_remainder;  // side effect of nanosleep() for premature wake
  */
 static void 
 wait_for_catnip()
 {
-	nanosleep( &kitty_catnap_request, &kitty_catnap_remainder );
+	int result;
+	fprintf( stderr, "kittycat: napping %ld s, %ld ns\n", kitty_catnap_request.tv_sec, kitty_catnap_request.tv_nsec );
+	result = nanosleep( &kitty_catnap_request, &kitty_catnap_remainder );
+	fprintf( stderr, "kittycat: awake result %d, errno %d, remaining %ld s, %ld ns\n", result, errno, kitty_catnap_remainder.tv_sec, kitty_catnap_remainder.tv_nsec );
 }
 
+static void
+catch_catnip( int signum ){
+	fprintf( stderr, "kittycat caught %d\n", signum );
+	return; // back to neverland
+}
+
+
+/*
+ * kittycat catches catnip signals
+ * struct sigaction kitty_catnip_handler; // catnip (or other origin) signals to handle
+ */
+static void
+ready_for_catnip(){
+	kitty_catnip_handler.sa_handler = catch_catnip;
+	kitty_catnip_handler.sa_flags = 0;
+	sigaction( SIGHUP, &kitty_catnip_handler, NULL );
+	sigaction( SIGTERM, &kitty_catnip_handler, NULL );
+	sigaction( SIGCONT, &kitty_catnip_handler, NULL );
+}
 
