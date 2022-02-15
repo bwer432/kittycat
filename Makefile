@@ -4,7 +4,7 @@
 
 MAJOR?=0
 MINOR?=1
-PATCH?=3
+PATCH?=5
 
 VERSION=$(MAJOR).$(MINOR).$(PATCH)
 APP_NAME = "kittycat"
