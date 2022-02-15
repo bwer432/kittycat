@@ -254,7 +254,7 @@ signame_to_signum(sig)
 	if (!strncasecmp(sig, "sig", (size_t)3))
 		sig += 3;
 	for (n = 1; n < NSIG; n++) {
-		if (!strcasecmp(sys_signame[n], sig))
+		if (!strcasecmp(sys_siglist[n], sig))
 			return (n);
 	}
 	return (-1);
@@ -690,7 +690,7 @@ int http_head( int body_fd, struct http_request* req ){
 	case 0:
 		sprintf( statbuf, "%lld", docstat.st_size );
 		add_response_header( "Content-Length", statbuf ); // that will copy, we can reuse statbuf
-		resulttm = gmtime_r( &docstat.st_mtimespec.tv_sec, &tm );
+		resulttm = gmtime_r( &docstat.st_mtim.tv_sec, &tm );
 		if( resulttm != NULL ){
 			int l;
 			l = strftime( statbuf, 64, "%a, %d %b %Y %H:%M:%S %Z", &tm );

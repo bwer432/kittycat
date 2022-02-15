@@ -73,7 +73,7 @@ static char sccsid[] = "@(#)cat.c	8.2 (Berkeley) 4/27/95";
 #endif
 #endif /* not lint */
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: src/bin/cat/cat.c,v 1.32 2005/01/10 08:39:20 imp Exp $");
+static char fbsdid[] = "$FreeBSD: src/bin/cat/cat.c,v 1.32 2005/01/10 08:39:20 imp Exp $";
 
 #include <sys/param.h>
 #include <sys/stat.h>
@@ -100,7 +100,7 @@ int kflag; // kittycat (kc) extensions
 int rval;
 const char *filename;
 const char *kitty;       // path to kitty marker (PID file) that facilitates signalling us
-sigset_t kitty_catnip_invulnerabilities; // catnip (or other origin) signals to ignore
+// sigset_t kitty_catnip_invulnerabilities; // catnip (or other origin) signals to ignore
 struct timespec kitty_catnap_request;    // set .tv_sec or .tv_nsec to requested nap time
 struct timespec kitty_catnap_remainder;  // side effect of nanosleep() for premature wake
 
@@ -123,7 +123,7 @@ main(int argc, char *argv[])
 
 	setlocale(LC_CTYPE, "");
 	kitty = ".kc"; // warning: default does not support concurrency in shared file namespace
-	kitty_catnip_invulnerabilities = 0;
+	// kitty_catnip_invulnerabilities = 0; or loop for sizeof()
 	kitty_catnap_request.tv_sec = 0;
 	kitty_catnap_request.tv_nsec = 250000000; // default to quarter second
 
@@ -329,9 +329,10 @@ udom_open(const char *path, int flags)
 	 */
 	fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (fd >= 0) {
+		char* r;
 		sou.sun_family = AF_UNIX;
-		if ((len = strlcpy(sou.sun_path, path,
-		    sizeof(sou.sun_path))) >= sizeof(sou.sun_path)) {
+		if ((r = strncpy(sou.sun_path, path,
+		    sizeof(sou.sun_path))) == 0) {
 			errno = ENAMETOOLONG;
 			return (-1);
 		}
