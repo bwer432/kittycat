@@ -161,7 +161,7 @@ main(argc, argv)
 	kitty = ".kc"; // warning: default does not support concurrency in shared file namespace
 	head = "response.http"; // default response header output file path
 	body = "body";		// default body output file path
-	webroot = "kitty";	// default web root instead of www
+	webroot = getenv("KITTY"); if( webroot == NULL)webroot = "kitty";	// default web root instead of www, -w can override env or default
 	usefork = 0;		// use path stripping by default, can use fork/chroot instead
 
 	while ((ch = getopt(argc, argv, "fk:s:w:")) != -1)
