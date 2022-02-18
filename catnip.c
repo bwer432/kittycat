@@ -157,7 +157,7 @@ main(argc, argv)
 	if (argc < 1)
 		usage();
 
-	numsig = SIGCONT;	// catnip defaults to SIGCONT unlike kill's default SIGTERM;
+	numsig = SIGTERM;	// catnip now defaults to SIGTERM like kill's default SIGTERM; SIGCONT retains original kittycat behavior, SIGTERM only requires one signal per kittycat batch
 	kitty = ".kc"; // warning: default does not support concurrency in shared file namespace
 	head = "response.http"; // default response header output file path
 	body = "body";		// default body output file path

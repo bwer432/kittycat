@@ -103,6 +103,7 @@ const char *kitty;       // path to kitty marker (PID file) that facilitates sig
 struct sigaction kitty_catnip_handler; // catnip (or other origin) signals to handle
 struct timespec kitty_catnap_request;    // set .tv_sec or .tv_nsec to requested nap time
 struct timespec kitty_catnap_remainder;  // side effect of nanosleep() for premature wake
+int kitty_catnip_received; 		 // which signal received
 
 static void usage(void);
 static void scanfiles(char *argv[], int cooked);
@@ -416,18 +417,29 @@ parse_timespec( char* wait_time, struct timespec* result )
  *      struct sigaction kitty_catnip_handler;   // catnip (or other origin) signals to handle
  * 	struct timespec kitty_catnap_request;    // set .tv_sec or .tv_nsec to requested nap time
  * 	struct timespec kitty_catnap_remainder;  // side effect of nanosleep() for premature wake
+ * The waiter here now is responsible for following the state of which signal(s) have been received.
  */
 static void 
 wait_for_catnip()
 {
 	int result;
-	fprintf( stderr, "kittycat: napping %ld s, %ld ns\n", kitty_catnap_request.tv_sec, kitty_catnap_request.tv_nsec );
-	result = nanosleep( &kitty_catnap_request, &kitty_catnap_remainder );
-	fprintf( stderr, "kittycat: awake result %d, errno %d, remaining %ld s, %ld ns\n", result, errno, kitty_catnap_remainder.tv_sec, kitty_catnap_remainder.tv_nsec );
+	switch( kitty_catnip_received ){
+	case 0:       // we have received nothing, first time waiting
+	default:      // default to Continue style
+	case SIGCONT: // continue to next file in list
+		fprintf( stderr, "kittycat: napping %ld s, %ld ns\n", kitty_catnap_request.tv_sec, kitty_catnap_request.tv_nsec );
+		result = nanosleep( &kitty_catnap_request, &kitty_catnap_remainder );
+		fprintf( stderr, "kittycat: awake result %d, errno %d, remaining %ld s, %ld ns\n", result, errno, kitty_catnap_remainder.tv_sec, kitty_catnap_remainder.tv_nsec );
+		break;
+	case SIGHUP:  // shouldn't even process more, but...
+	case SIGTERM: // continue through all remaining files
+		break; // without further ado
+	}
 }
 
 static void
 catch_catnip( int signum ){
+	kitty_catnip_received = signum; // remembers only most recent signal caught
 	fprintf( stderr, "kittycat caught %d\n", signum );
 	return; // back to neverland
 }
@@ -439,6 +451,7 @@ catch_catnip( int signum ){
  */
 static void
 ready_for_catnip(){
+	kitty_catnip_received = 0; // have not yet received any signals
 	kitty_catnip_handler.sa_handler = catch_catnip;
 	kitty_catnip_handler.sa_flags = 0;
 	sigaction( SIGHUP, &kitty_catnip_handler, NULL );

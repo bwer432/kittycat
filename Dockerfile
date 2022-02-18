@@ -16,6 +16,6 @@ COPY --from=build-stage /usr/bin/cn /usr/bin
 COPY --from=build-stage /usr/bin/kc /usr/bin
 WORKDIR /var/local/kitty
 COPY kitty/* ./
-CMD ["sh","-c","kc -w 86400 response.http body | nc -l 80 | cn -w /var/local/kitty"]
+CMD ["sh","-c","kc -w 86400 response.http body | nc -v -l -p 80 | cn -w /var/local/kitty"]
 EXPOSE 80
 
