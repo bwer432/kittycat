@@ -138,6 +138,8 @@ struct version_map http_versions[] = { // plural
 	{ NULL, HTTP_VERSION_UNKNOWN }
 };
 
+int  verbosity; // debugging detail, global is as global does
+
 int
 main(argc, argv)
 	int argc;
@@ -153,6 +155,7 @@ main(argc, argv)
 	int  body_fd;
 	char *webroot; // kitty (instead of www or webroot etc.)
 	int  usefork;  // use fork/chroot instead of path stripping
+	verbosity = 0;  // debugging detail
 
 	if (argc < 1)
 		usage();
@@ -164,7 +167,7 @@ main(argc, argv)
 	webroot = getenv("KITTY"); if( webroot == NULL)webroot = "kitty";	// default web root instead of www, -w can override env or default
 	usefork = 0;		// use path stripping by default, can use fork/chroot instead
 
-	while ((ch = getopt(argc, argv, "fk:s:w:")) != -1)
+	while ((ch = getopt(argc, argv, "fk:s:vw:")) != -1)
 		switch (ch) {
 		case 'f':
 			++usefork;		/* use fork/chroot instead of path stripping */
@@ -185,6 +188,9 @@ main(argc, argv)
 					nosig(optarg);
 			} else
 				nosig(optarg);
+			break;
+		case 'v':			/* verbosity */
+			++verbosity;
 			break;
 		case 'w':			/* kitty webroot */
 			webroot = optarg;
@@ -225,7 +231,7 @@ main(argc, argv)
 	// nip the kittycat once for header
 	close(head_fd);
 	pid = read_kitty_marker( kitty ); // moved down here because of race condition
-	fprintf( stderr, "going to signal (nip) pid=%d\n", pid );
+	if( verbosity >= 0 )fprintf( stderr, "going to signal (nip) pid=%d\n", pid ); // we always want to know this
 	if( pid ){
 		if (kill(pid, numsig) == -1) {
 			warn("signalling %s", head);
@@ -366,11 +372,13 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 	// body of any significant size are *not* currently supported.
 	//
 	for( p = req->buf; (req->nr = read(rfd, req->buf, req->bsize)) > 0; ){
-		fprintf( stderr, "read %ld bytes\n", req->nr );
-		for( int i = 0; i < req->nr; ++i ){
-			fprintf( stderr, "%2x ", req->buf[i] );
+		if( verbosity >= 1 )fprintf( stderr, "read %ld bytes\n", req->nr );
+		if( verbosity >= 2 ){
+			for( int i = 0; i < req->nr; ++i ){
+				fprintf( stderr, "%2x ", req->buf[i] );
+			}
+			fprintf( stderr, ";\n" );
 		}
-		fprintf( stderr, ";\n" );
 		req->method = p; // assumption for entering WANT_METHOD
 		// NOT sscanf( p, "%s %s %s\n", &method, &target, &version );
 		for( req->np = 0; req->np < req->nr && ( c = *p ) != '\0' && !req->e && req->state != WANT_BODY; ++p, ++req->np ){
@@ -408,7 +416,7 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 				case WANT_VERSION:
 					// not expecting spaces within the HTTP version
 					// should flag an error
-					fprintf( stderr, "spaces within http version\n" );
+					if( verbosity >= 1 )fprintf( stderr, "spaces within http version\n" );
 					req->e = 505; // unsupported version, or 400 bad request
 					break;
 				case WANT_HEADER_KEY:
@@ -438,9 +446,9 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 					req->state = WANT_HEADER_KEY;
 					req->hk = p+1; // assuming a header-key comes next
 					// check version at this point
-					fprintf( stderr, "checking http version %s;\n", req->version );
+					if( verbosity >= 1 )fprintf( stderr, "checking http version %s;\n", req->version );
 					for( req->vp = http_versions; req->vp && req->vp->version != NULL; ++req->vp ){
-						fprintf( stderr, "is http version %s?\n", req->vp->version );
+						if( verbosity >= 2 )fprintf( stderr, "is http version %s?\n", req->vp->version );
 						if( strcmp( req->version, req->vp->version ) == 0 ){
 							// we have a winner, retain vp value
 							break;
@@ -448,7 +456,7 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 					}
 					if( req->vp->version == NULL ){
 						// no match
-						fprintf( stderr, "no matching http version for %s;\n", req->version );
+						if( verbosity >= 1 )fprintf( stderr, "no matching http version for %s;\n", req->version );
 						req->vp = NULL;
 						req->e = 505; // unsupported version
 					}
@@ -457,7 +465,7 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 					*p = '\0'; // terminate the header value
 					req->state = WANT_HEADER_KEY;
 					// preprocess this header now - must save (hk,hv)
-					fprintf( stderr, "catnip: should process header: (%s,%s)\n", req->hk, req->hv );
+					if( verbosity >= 1 )fprintf( stderr, "catnip: should process header: (%s,%s)\n", req->hk, req->hv );
 					req->state = WANT_HEADER_KEY; // get set for the next one
 					req->hk = p+1; // assuming a header-key comes next
 					req->hv = NULL;
@@ -470,7 +478,7 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 					}
 					else {
 						*p = '\0'; // terminate only to show error
-						fprintf( stderr, "null header value, k=[%s]\n", req->hk );
+						if( verbosity >= 1 )fprintf( stderr, "null header value, k=[%s]\n", req->hk );
 						req->e = 400; // bad request - null header value
 						req->message = "Bad Request - null header";
 					}
@@ -489,26 +497,28 @@ parse_request(int rfd, int head_fd, int body_fd, char* webroot, int usefork)
 		}
 		if( req->e ){
 			// some error in parsing
-			fprintf( stderr, "got error code %d while parsing, state = %d\n", req->e, req->state );
+			if( verbosity >= 0 )fprintf( stderr, "got error code %d while parsing, state = %d\n", req->e, req->state );
 			break;
 		}
 		// TEMPORARY, or PERMANENT, see BUF-BUG note.
 		break; // because BUF-BUG mentioned at top does not allow multiple buf, we cannot allow overwrite!
 	}
-	fprintf( stderr, "catnip: request parsing summary; " );
-	if( req->method != NULL )fprintf( stderr, "method=%s; ", req->method );
-	if( req->target != NULL )fprintf( stderr, "target=%s; ", req->target );
-	if( req->version != NULL )fprintf( stderr, "version=%s; ", req->version );
-	fprintf( stderr, ";\n" );
-	fprintf( stderr, "e = %d, state = %d, map = %ld;\n", req->e, req->state, (long)req->map ); // debug
+	if( verbosity >= 1 ){
+		fprintf( stderr, "catnip: request parsing summary; " );
+		if( req->method != NULL )fprintf( stderr, "method=%s; ", req->method );
+		if( req->target != NULL )fprintf( stderr, "target=%s; ", req->target );
+		if( req->version != NULL )fprintf( stderr, "version=%s; ", req->version );
+		fprintf( stderr, ";\n" );
+		fprintf( stderr, "e = %d, state = %d, map = %ld;\n", req->e, req->state, (long)req->map ); // debug
+									    }
 	if( req->e == 0 && req->state == WANT_BODY ){
 		if( req->map != NULL ){
 			reset_response_headers();
-			fprintf( stderr, "catnip: trying action %s\n", req->map->method );
+			if( verbosity >= 1 )fprintf( stderr, "catnip: trying action %s\n", req->map->method );
 			req->body_length = req->nr - (p - req->buf);
 			// old method action took ( body_fd, req->body, req->nr - (p - req->buf) )
 			req->e = (*req->map->action)( body_fd, req );
-			fprintf( stderr, "catnip: back from action %s, e = %d\n", req->map->method, req->e );
+			if( verbosity >= 1 )fprintf( stderr, "catnip: back from action %s, e = %d\n", req->map->method, req->e );
 		}
 	}
 	write_http_response( head_fd, req->version, req->e, req->message, req->content_type, req->other_headers );
@@ -605,7 +615,7 @@ char* wrangle_path( struct http_request* req ){
 	char* default_doc = "index.html"; // should really be a parameter
 	// length of / (1) --> kitty/index.html\0 (17)
 	int   effective_length = strlen( req->webroot ) + strlen( req->target ) + strlen( default_doc ) + 2; // has margin if not default_doc...
-	fprintf( stderr, "into wrangle: target=%s\n", req->target );
+	if( verbosity >= 1 )fprintf( stderr, "into wrangle: target=%s\n", req->target );
 	if( ( herded_path = malloc( effective_length ) ) == NULL ){
 		req->e = 500; // not enough memory for path
 	}
@@ -616,7 +626,7 @@ char* wrangle_path( struct http_request* req ){
 		strcat( herded_path, req->target );
 		if( ( p = strrchr( herded_path, '/' ) ) != NULL && p[1] == '\0' ) // ends with /
 			strcat( herded_path, default_doc );
-		fprintf( stderr, "wrangle out: %s\n", herded_path );
+		if( verbosity >= 1 )fprintf( stderr, "wrangle out: %s\n", herded_path );
 	}
 	return herded_path;
 }
@@ -700,10 +710,10 @@ int http_head( int body_fd, struct http_request* req ){
 		}
 		// want other headers? 
 		// what about content type - a *simple* suffix to type assumption table?
-		fprintf( stderr, "HEAD got okay stat.\n" );
+		if( verbosity >= 1 )fprintf( stderr, "HEAD got okay stat.\n" );
 		break;
 	case -1:
-		fprintf( stderr, "HEAD got stat = %d, errno = %d\n", e, errno );
+		if( verbosity >= 1 )fprintf( stderr, "HEAD got stat = %d, errno = %d\n", e, errno );
 		break;
 	}
 		// docstat.st_mode
