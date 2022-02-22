@@ -1,0 +1,10 @@
+FROM bwer432/kittycat:thick AS base-image
+
+FROM alpine
+RUN apk update && apk add curl
+COPY --from=base-image /usr/bin/cn /usr/bin
+COPY --from=base-image /usr/bin/kc /usr/bin
+WORKDIR /var/local/kitty
+COPY kitty/* ./
+CMD ["sh","-c","kc -w 86400 response.http body | nc -v -l -p 80 | cn -w /var/local/kitty"]
+EXPOSE 80

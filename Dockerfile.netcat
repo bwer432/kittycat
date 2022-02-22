@@ -1,0 +1,21 @@
+FROM alpine AS build-stage
+RUN apk update && apk add curl && apk add build-base
+RUN mkdir /src
+WORKDIR /src
+COPY ./kittycat.c ./catnip.c ./catnip.h ./
+RUN cc -c kittycat.c \
+    && cc -c catnip.c \
+    && cc -static -o kc kittycat.o \
+    && cc -static -o cn catnip.o
+RUN cp cn /usr/bin/
+RUN cp kc /usr/bin/
+
+FROM scratch
+COPY --from=build-stage /bin/ln /bin/ln
+COPY --from=build-stage /lib/ld-musl-x86_64.so.1 /lib/
+RUN ["/bin/ln", "-s", "/lib/ld-musl-x86_64.so.1", "/lib/libc.musl-x86_64.so.1"]
+COPY --from=build-stage /usr/bin/nc /usr/bin/
+ENTRYPOINT ["/usr/bin/nc"]
+CMD ["-v","-l","-p","80"]
+EXPOSE 80
+

@@ -1,0 +1,27 @@
+FROM alpine AS build-stage
+RUN apk update && apk add curl && apk add build-base
+RUN mkdir /src
+WORKDIR /src
+COPY ./kittycat.c ./catnip.c ./catnip.h ./
+RUN cc -c kittycat.c \
+    && cc -c catnip.c \
+    && cc -static -o kc kittycat.o \
+    && cc -static -o cn catnip.o
+RUN cp cn /usr/bin/
+RUN cp kc /usr/bin/
+
+FROM scratch
+COPY --from=build-stage /usr/bin/cn /usr/bin/
+COPY --from=build-stage /usr/bin/kc /usr/bin/
+COPY --from=build-stage /bin/ln /bin/ln
+COPY --from=build-stage /lib/ld-musl-x86_64.so.1 /lib/
+RUN ["/bin/ln", "-s", "/lib/ld-musl-x86_64.so.1", "/lib/libc.musl-x86_64.so.1"]
+COPY --from=build-stage /bin/busybox /bin
+RUN ["/bin/ln", "-s", "/bin/busybox", "/bin/sh"]
+COPY --from=build-stage /usr/bin/nc /usr/bin
+WORKDIR /var/local/kitty
+COPY kitty/* ./
+ENTRYPOINT ["sh","-c"]
+CMD ["kc -w 86400 response.http body | nc -v -l -p 80 | cn -w /var/local/kitty"]
+EXPOSE 80
+
